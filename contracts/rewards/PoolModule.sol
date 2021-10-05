@@ -57,6 +57,13 @@ contract PoolModule is Initializable, OwnableUpgradeable {
 
     mapping(address => bool) public indexerAddress;
 
+    mapping(uint256 => uint256) public totalPoolTokens;
+    mapping(address => bool) public userTokensAddedToTotal;
+    mapping(uint256 => uint256) public currentXGTPriceOfPool;
+
+    mapping(uint256 => uint256) public xgtInStakingPool;
+    uint256[] public stakingPools;
+
     event PoolAdded(address poolAddress, uint256 networkID, uint256 bonusAPY);
     event PoolActiveStateToggled(
         address poolAddress,
@@ -135,6 +142,7 @@ contract PoolModule is Initializable, OwnableUpgradeable {
     function setCurrentPoolPrice(
         uint256 _id,
         uint256 _xgtPerLP,
+        uint256 _xgtPrice,
         uint256 _timestamp
     ) external onlyIndexer validPool(_id) {
         require(
@@ -156,6 +164,8 @@ contract PoolModule is Initializable, OwnableUpgradeable {
             // remove last element 11
             pools[_id].prices.pop();
         }
+
+        currentXGTPriceOfPool[_id] = _xgtPrice;
     }
 
     function setUserPoolTokens(
@@ -174,6 +184,16 @@ contract PoolModule is Initializable, OwnableUpgradeable {
             "XGT-REWARD-CHEST-ARRAY-LENGTHS-DONT-MATCH"
         );
         for (uint256 i = 0; i < _ids.length; i++) {
+            if (!userTokensAddedToTotal[_user]) {
+                totalPoolTokens[_ids[i]] = totalPoolTokens[_ids[i]].add(
+                    _amount[i]
+                );
+            } else {
+                totalPoolTokens[_ids[i]] = totalPoolTokens[_ids[i]]
+                    .sub(userPoolTokens[_user][_ids[i]])
+                    .add(_amount[i]);
+            }
+
             userPoolTokens[_user][_ids[i]] = _amount[i];
             for (uint256 j = 0; j < promotionBoosts.length; j++) {
                 if (
@@ -196,11 +216,39 @@ contract PoolModule is Initializable, OwnableUpgradeable {
                 }
             }
         }
+        if (!userTokensAddedToTotal[_user]) {
+            userTokensAddedToTotal[_user] = true;
+        }
         // remove old boosts
         for (uint256 k = 0; k < userBoosts[_user].length; k++) {
             if (userBoosts[_user][k].end <= userLastClaimedPool[_user]) {
                 _removeUserBoost(_user, k);
             }
+        }
+    }
+
+    function setStakingPoolTokens(uint256 _poolChainId, uint256 _xgtInPool)
+        external
+        onlyIndexer
+    {
+        // If zero, add it to the array
+        if (xgtInStakingPool[_poolChainId] == 0) {
+            stakingPools.push(_poolChainId);
+        }
+
+        // Set value
+        xgtInStakingPool[_poolChainId] = _xgtInPool;
+
+        // If zero now, remove from array
+        if (xgtInStakingPool[_poolChainId] == 0) {
+            if (stakingPools.length > 1) {
+                for (uint256 i = 0; i < stakingPools.length; i--) {
+                    if (i != stakingPools.length - 1) {
+                        stakingPools[i] = stakingPools[stakingPools.length - 1];
+                    }
+                }
+            }
+            stakingPools.pop();
         }
     }
 
@@ -333,7 +381,11 @@ contract PoolModule is Initializable, OwnableUpgradeable {
         );
     }
 
-    function getLatestPoolPrice(uint256 _id) external view returns (uint256) {
+    function getLatestPoolTokenPrice(uint256 _id)
+        public
+        view
+        returns (uint256)
+    {
         return pools[_id].prices[pools[_id].prices.length - 1].xgtPerLPToken;
     }
 
@@ -509,6 +561,63 @@ contract PoolModule is Initializable, OwnableUpgradeable {
             }
         }
         return boosts;
+    }
+
+    function getPoolValue(uint256 _id) public view returns (uint256) {
+        return
+            totalPoolTokens[_id]
+                .mul(getLatestPoolTokenPrice(_id))
+                .mul(currentXGTPriceOfPool[_id])
+                .div(10**36);
+    }
+
+    function getStakingValue(uint256 _networkId) public view returns (uint256) {
+        // find pool for the network to determine price
+        uint256 poolId;
+        for (uint256 i = 0; i <= currentPoolID; i++) {
+            if (pools[i].networkID == _networkId) {
+                poolId = i;
+                break;
+            }
+        }
+
+        return
+            xgtInStakingPool[_networkId].mul(currentXGTPriceOfPool[poolId]).div(
+                10**18
+            );
+    }
+
+    function getTotalValue() external view returns (uint256) {
+        uint256 totalValue = 0;
+        for (uint256 i = 0; i <= currentPoolID; i++) {
+            if (pools[i].addr != address(0)) {
+                totalValue = totalValue.add(getPoolValue(i));
+            }
+        }
+
+        for (uint256 j = 0; j < stakingPools.length; j++) {
+            totalValue = totalValue.add(getStakingValue(stakingPools[j]));
+        }
+
+        return totalValue;
+    }
+
+    function getCurrentAverageXGTPrice() external view returns (uint256) {
+        uint256 totalSum = 0;
+        uint256 totalDiv = 0;
+        for (uint256 i = 0; i <= currentPoolID; i++) {
+            if (pools[i].addr != address(0)) {
+                totalSum = totalSum.add(
+                    totalPoolTokens[i].mul(getLatestPoolTokenPrice(i)).mul(
+                        currentXGTPriceOfPool[i]
+                    )
+                );
+                totalDiv = totalDiv.add(
+                    totalPoolTokens[i].mul(getLatestPoolTokenPrice(i))
+                );
+            }
+        }
+        return totalSum.div(totalDiv);
     }
 
     modifier onlyIndexer() {
