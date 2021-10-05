@@ -75,7 +75,7 @@ You can find the contract [here](https://github.com/xion-global/xionfinance_smar
 
 ### Subscriptions
 
-The  documentation and smart contracts of the Xion Global platform can be found [here](https://github.com/xion-global/xionfinance_smartcontract/tree/master/contracts/rewards).
+The  documentation and smart contracts of the Xion Global platform can be found [here](https://github.com/xion-global/xionfinance_smartcontract/tree/master/contracts/subscriptions).
 
 ### Upgradeability
 
