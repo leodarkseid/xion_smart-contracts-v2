@@ -39,7 +39,7 @@ You can find the contract [here](https://github.com/xion-global/xionfinance_smar
 
 We recently added a way for users to stake their <img src="https://xion.finance/images/xgt_icon.png" width="12" height="12"> XGT in order earn compounded interest throughout the year. Currently users are earning a 150% APY, both on the xDai chain and the Binance Smart Chain.
 
-We incorporated this functionality directly into our reward chest module system, so the earning part is implemented in the form of a StakingModule contract. Users can call the `deposit()` and `withdraw()` functions at any time, only incurring a small withdraw penalty if they withdraw prior to 72 hours after their last deposit.
+We incorporated this functionality directly into our reward chest module system, so the earning part is implemented in the form of a StakingModule contract. Users can call the `deposit()` and `withdraw()` functions at any time, only incurring a small withdraw penalty if they withdraw prior to 72 hours after their last deposit. Deposits of merchants that are auto-staking their sale-earnings through the staking module will not count towards that penalty, so they can withdraw their staked XGT without a penalty at all times.
 
 The contract is built in a way so the rewards auto-compound each time someone interacts with the contract. This way, our users will receive even higher APYs!
 
