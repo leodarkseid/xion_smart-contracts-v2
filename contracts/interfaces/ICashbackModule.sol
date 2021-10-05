@@ -2,6 +2,5 @@
 pragma solidity 0.7.6;
 
 interface ICashbackModule {
-    function addCashbacks(address[] calldata _recipients, uint256 _amount)
-        external;
+    function addCashback(address _recipient, uint256 _amount) external;
 }
