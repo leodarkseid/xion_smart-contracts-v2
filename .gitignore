@@ -4,3 +4,4 @@ artifacts/
 cache/
 bin/
 node_modules
+.secrets.json
