@@ -202,8 +202,8 @@ contract StakingModule is
         );
         // subtract hardvest reward from balance, since it's not part
         // of the current balance originally
-        uint256 currentAmount =
-            ((balanceOf().sub(_harvestReward)).mul(_shares)).div(totalShares);
+        uint256 currentAmount = ((balanceOf().sub(_harvestReward)).mul(_shares))
+            .div(totalShares);
         user.shares = user.shares.sub(_shares);
         totalShares = totalShares.sub(_shares);
         user.deposits = user.deposits.mul(user.shares).div(
@@ -211,8 +211,9 @@ contract StakingModule is
         );
 
         if (block.timestamp < user.lastDepositedTime.add(withdrawFeePeriod)) {
-            uint256 currentWithdrawFee =
-                currentAmount.mul(withdrawFee).div(BP_DECIMALS);
+            uint256 currentWithdrawFee = currentAmount.mul(withdrawFee).div(
+                BP_DECIMALS
+            );
             freezer.freeze(currentWithdrawFee);
             currentAmount = currentAmount.sub(currentWithdrawFee);
         }
@@ -243,8 +244,9 @@ contract StakingModule is
             "XGT-REWARD-MODULE-INSTANT-CLAIM-FROM-CHEST-FAILED"
         );
 
-        uint256 currentPerformanceFee =
-            harvestAmount.mul(performanceFee).div(BP_DECIMALS);
+        uint256 currentPerformanceFee = harvestAmount.mul(performanceFee).div(
+            BP_DECIMALS
+        );
         freezer.freeze(currentPerformanceFee);
 
         uint256 currentCallFee = harvestAmount.mul(callFee).div(BP_DECIMALS);
@@ -264,10 +266,11 @@ contract StakingModule is
 
     function currentHarvestAmount() public view returns (uint256) {
         uint256 diff = block.timestamp.sub(lastHarvestedTime);
-        uint256 harvestAmount =
-            balanceOf().mul(stakingAPY).mul(diff).div(BP_DECIMALS).div(
-                YEAR_IN_SECONDS
-            );
+        uint256 harvestAmount = balanceOf()
+            .mul(stakingAPY)
+            .mul(diff)
+            .div(BP_DECIMALS)
+            .div(YEAR_IN_SECONDS);
         return harvestAmount;
     }
 
@@ -276,10 +279,9 @@ contract StakingModule is
         view
         returns (uint256)
     {
-        uint256 harvestAfterFees =
-            currentHarvestAmount()
-                .mul(BP_DECIMALS.sub(performanceFee).sub(callFee))
-                .div(BP_DECIMALS);
+        uint256 harvestAfterFees = currentHarvestAmount()
+            .mul(BP_DECIMALS.sub(performanceFee).sub(callFee))
+            .div(BP_DECIMALS);
         uint256 balanceAfterHarvest = balanceOf().add(harvestAfterFees);
         if (totalShares == 0) {
             return 0;
