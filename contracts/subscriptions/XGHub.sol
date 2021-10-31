@@ -30,41 +30,44 @@ contract XGHub is OwnableUpgradeable, PausableUpgradeable {
         xgt = IERC20(_xgt);
         OwnableUpgradeable.__Ownable_init();
         PausableUpgradeable.__Pausable_init();
-        transferOwnership(_owner);
+        OwnableUpgradeable.transferOwnership(_owner);
     }
 
-    function updateWalletAddress(address _wallet) external onlyOwner {
+    function setWalletAddress(address _wallet) external onlyOwner {
         wallet = IXGWallet(_wallet);
+        wallet.setSubscriptionsContract(address(subscriptions));
+        wallet.setPurchasesContract(address(purchases));
     }
 
-    function updateFeaturesAddress(address _features) external onlyOwner {
+    function setFeaturesAddress(address _features) external onlyOwner {
         features = IXGFeatureRegistry(_features);
     }
 
-    function updateCashbackModule(address _cashbackModule) external onlyOwner {
+    function setCashbackModule(address _cashbackModule) external onlyOwner {
         cashback = ICashbackModule(_cashbackModule);
         purchases.setCashbackAddress(_cashbackModule);
     }
 
-    function updateSubscriptionsModule(address _subscriptionsModule)
+    function setSubscriptionsModule(address _subscriptionsModule)
         external
         onlyOwner
     {
         subscriptions = IXGSubscriptions(_subscriptionsModule);
-        wallet.updateSubscriptionsContract(_subscriptionsModule);
+        subscriptions.setWallet(address(wallet));
+        subscriptions.setFeeWallet(feeWallet);
+        wallet.setSubscriptionsContract(_subscriptionsModule);
     }
 
-    function updatePurchasesModule(address _purchasesModule)
-        external
-        onlyOwner
-    {
+    function setPurchasesModule(address _purchasesModule) external onlyOwner {
         purchases = IXGPurchases(_purchasesModule);
-        wallet.updatePurchasesContract(_purchasesModule);
+        purchases.setWallet(address(wallet));
+        purchases.setCashbackAddress(address(cashback));
+        wallet.setPurchasesContract(_purchasesModule);
     }
 
-    function updateFeeWallet(address _feeWallet) external onlyOwner {
+    function setFeeWallet(address _feeWallet) external onlyOwner {
         feeWallet = _feeWallet;
-        wallet.updateFeeWallet(_feeWallet);
+        wallet.setFeeWallet(_feeWallet);
         subscriptions.setFeeWallet(_feeWallet);
     }
 
@@ -73,10 +76,14 @@ contract XGHub is OwnableUpgradeable, PausableUpgradeable {
         onlyOwner
     {
         authorized[_address] = _authorized;
-        wallet.setAuthorizedAddress(_address, _authorized);
-        features.setAuthorizedAddress(_address, _authorized);
-        subscriptions.setAuthorizedAddress(_address, _authorized);
-        purchases.setAuthorizedAddress(_address, _authorized);
+    }
+
+    function getAuthorizationStatus(address _address)
+        public
+        view
+        returns (bool)
+    {
+        return authorized[_address];
     }
 
     function pause() external onlyOwner whenNotPaused {
@@ -95,9 +102,17 @@ contract XGHub is OwnableUpgradeable, PausableUpgradeable {
         purchases.unpause();
     }
 
+    function transferOwnership(address newOwner) public override onlyOwner {
+        OwnableUpgradeable.transferOwnership(newOwner);
+        wallet.transferOwnership(newOwner);
+        features.transferOwnership(newOwner);
+        subscriptions.transferOwnership(newOwner);
+        purchases.transferOwnership(newOwner);
+    }
+
     modifier onlyAuthorized() {
         require(
-            authorized[msg.sender] || msg.sender == owner(),
+            getAuthorizationStatus(msg.sender) || msg.sender == owner(),
             "Not authorized"
         );
         _;

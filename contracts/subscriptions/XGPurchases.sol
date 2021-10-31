@@ -6,14 +6,14 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "../interfaces/ICashbackModule.sol";
 import "../interfaces/IXGWallet.sol";
+import "../interfaces/IXGHub.sol";
 import "../interfaces/IDateTime.sol";
 
 contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
     using SafeMathUpgradeable for uint256;
     ICashbackModule public cashback;
     IXGWallet public wallet;
-    IDateTime public dateTimeLib;
-    address public hub;
+    IXGHub public hub;
 
     struct Purchase {
         address user;
@@ -25,7 +25,6 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         bool paid;
     }
 
-    mapping(address => bool) public authorized;
     mapping(bytes32 => Purchase) public purchases;
 
     event PurchasePaid(
@@ -39,27 +38,24 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         uint256 tokenPrice
     );
 
-    function initialize(address _hub, address _owner) external initializer {
-        hub = _hub;
+    function initialize(address _hub) external initializer {
+        hub = IXGHub(_hub);
 
         OwnableUpgradeable.__Ownable_init();
         PausableUpgradeable.__Pausable_init();
-        transferOwnership(_owner);
+        transferOwnership(OwnableUpgradeable(address(hub)).owner());
     }
 
-    function updateCashbackModule(address _cashbackModule) external onlyHub {
+    function setCashbackAddress(address _cashbackModule) external onlyHub {
         cashback = ICashbackModule(_cashbackModule);
     }
 
-    function updateXGHub(address _hub) external onlyOwner {
-        hub = _hub;
+    function setXGHub(address _hub) external onlyOwner {
+        hub = IXGHub(_hub);
     }
 
-    function setAuthorizedAddress(address _address, bool _authorized)
-        external
-        onlyHub
-    {
-        authorized[_address] = _authorized;
+    function setWallet(address _wallet) external onlyHub {
+        wallet = IXGWallet(_wallet);
     }
 
     function pause() external onlyHub whenNotPaused {
@@ -159,7 +155,7 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
 
     modifier onlyAuthorized() {
         require(
-            authorized[msg.sender] || msg.sender == owner(),
+            hub.getAuthorizationStatus(msg.sender) || msg.sender == owner(),
             "Not authorized"
         );
         _;

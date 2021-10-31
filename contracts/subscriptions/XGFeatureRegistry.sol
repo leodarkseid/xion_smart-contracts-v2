@@ -4,32 +4,25 @@ pragma solidity 0.7.6;
 import "@openzeppelin/contracts-upgradeable/math/SafeMathUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import "../interfaces/IXGHub.sol";
 
 contract XGFeatureRegistry is OwnableUpgradeable, PausableUpgradeable {
     using SafeMathUpgradeable for uint256;
-    address public hub;
+    IXGHub public hub;
 
-    mapping(address => bool) public authorized;
     mapping(address => mapping(bytes32 => bool)) public unlockedFeatures;
     mapping(address => bytes32[]) public unlockedFeaturesOfUser;
 
-    function initialize(address _hub, address _owner) external initializer {
-        hub = _hub;
+    function initialize(address _hub) external initializer {
+        hub = IXGHub(_hub);
 
         OwnableUpgradeable.__Ownable_init();
         PausableUpgradeable.__Pausable_init();
-        transferOwnership(_owner);
+        transferOwnership(OwnableUpgradeable(address(hub)).owner());
     }
 
     function updateXGHub(address _hub) external onlyOwner {
-        hub = _hub;
-    }
-
-    function setAuthorizedAddress(address _address, bool _authorized)
-        external
-        onlyHub
-    {
-        authorized[_address] = _authorized;
+        hub = IXGHub(_hub);
     }
 
     function pause() external onlyHub whenNotPaused {
@@ -93,7 +86,7 @@ contract XGFeatureRegistry is OwnableUpgradeable, PausableUpgradeable {
 
     modifier onlyAuthorized() {
         require(
-            authorized[msg.sender] || msg.sender == owner(),
+            hub.getAuthorizationStatus(msg.sender) || msg.sender == owner(),
             "Not authorized"
         );
         _;

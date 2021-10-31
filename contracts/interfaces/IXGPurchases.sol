@@ -2,11 +2,13 @@
 pragma solidity 0.7.6;
 
 interface IXGPurchases {
-    function setAuthorizedAddress(address _address, bool _authorized) external;
-
     function setCashbackAddress(address _address) external;
+
+    function setWallet(address _wallet) external;
 
     function pause() external;
 
     function unpause() external;
+
+    function transferOwnership(address newOwner) external;
 }
