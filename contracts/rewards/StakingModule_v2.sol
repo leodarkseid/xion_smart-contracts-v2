@@ -20,6 +20,14 @@ contract StakingModule is
         uint256 lastDepositedTime;
         uint256 lastUserActionTime;
         uint256 debt;
+        address referrer;
+    }
+
+    struct Referral {
+        address referring;
+        address referral;
+        uint256 date;
+        bool rewarded;
     }
 
     IERC20 public xgt;
@@ -36,6 +44,7 @@ contract StakingModule is
     mapping(address => bool) public authorized;
 
     mapping(address => UserInfo) public userInfo;
+    mapping(address => Referral[]) public referrals;
     mapping(address => mapping(address => uint256)) public userCallRewards;
 
     uint256 public totalStaked;
@@ -56,6 +65,10 @@ contract StakingModule is
 
     uint256 public start;
     uint256 public end;
+
+    uint256 public referralMinTime;
+    uint256 public referralMinAmount;
+    mapping(address => uint256) public referralMinAmountSince;
 
     event Deposit(
         address indexed sender,
@@ -125,6 +138,14 @@ contract StakingModule is
         authorized[_addr] = _authorized;
     }
 
+    function setReferralVariables(uint256 _minTime, uint256 _minAmount)
+        external
+        onlyOwner
+    {
+        referralMinTime = _minTime;
+        referralMinAmount = _minAmount;
+    }
+
     function setFeeWallet(address _feeWallet) external onlyOwner {
         feeWallet = _feeWallet;
     }
@@ -189,8 +210,12 @@ contract StakingModule is
         _unpause();
     }
 
-    function deposit(uint256 _amount) external whenNotPaused notContract {
-        _deposit(msg.sender, _amount, false);
+    function deposit(uint256 _amount, address _referrer)
+        external
+        whenNotPaused
+        notContract
+    {
+        _deposit(msg.sender, _referrer, _amount, false);
     }
 
     function depositForUser(
@@ -198,11 +223,12 @@ contract StakingModule is
         uint256 _amount,
         bool _skipLastDepositUpdate
     ) external whenNotPaused onlyAuthorized {
-        _deposit(_user, _amount, _skipLastDepositUpdate);
+        _deposit(_user, address(0), _amount, _skipLastDepositUpdate);
     }
 
     function _deposit(
         address _user,
+        address _referrer,
         uint256 _amount,
         bool _skipLastDepositUpdate
     ) internal {
@@ -217,7 +243,28 @@ contract StakingModule is
 
         UserInfo storage user = userInfo[_user];
 
+        if (
+            _referrer != address(0) &&
+            user.lastUserActionTime == 0 &&
+            userInfo[_referrer].stake > referralMinAmount
+        ) {
+            Referral memory newRef = Referral(
+                _referrer,
+                _user,
+                block.timestamp,
+                false
+            );
+            referrals[_user].push(newRef);
+            referrals[_referrer].push(newRef);
+        }
+
         user.stake = user.stake.add(_amount);
+        if (
+            user.stake >= referralMinAmount &&
+            referralMinAmountSince[_user] == 0
+        ) {
+            referralMinAmountSince[_user] = block.timestamp;
+        }
         totalStaked = totalStaked.add(_amount);
         user.debt = user.stake.mul(rewardPerStakedToken).div(10**18);
         user.lastUserActionTime = block.timestamp;
@@ -279,6 +326,12 @@ contract StakingModule is
         user.stake = user.stake.sub(withdrawAmount);
         totalStaked = totalStaked.sub(withdrawAmount);
         user.debt = user.stake.mul(rewardPerStakedToken).div(10**18);
+
+        if (
+            user.stake < referralMinAmount && referralMinAmountSince[_user] != 0
+        ) {
+            referralMinAmountSince[_user] = 0;
+        }
 
         if (block.timestamp < user.lastDepositedTime.add(withdrawFeePeriod)) {
             uint256 currentWithdrawFee = withdrawAmount.mul(withdrawFee).div(
