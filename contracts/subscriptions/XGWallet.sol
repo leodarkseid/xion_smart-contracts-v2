@@ -21,6 +21,9 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     IXGHub public hub;
     address public purchases;
 
+    uint256 public xdaiTotalCheckoutValue;
+    uint256 public xgtTotalCheckoutValue;
+
     uint256 public FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP;
     uint256 public DEPOSIT_FEE_IN_BP;
     uint256 public WITHDRAW_FEE_IN_BP;
@@ -332,6 +335,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
             } else {
                 _transferXGT(_to, amountAfterFreeze);
             }
+            xgtTotalCheckoutValue = xgtTotalCheckoutValue.add(_amount);
             return (true, uint256(Currency.XGT));
         }
 
@@ -339,6 +343,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         if (_useFallback && userBalance[_from].base >= xDaiEquivalent) {
             _removeFromBaseBalance(_from, xDaiEquivalent);
             _removeMaxFromRestrictedBaseBalance(_from, xDaiEquivalent);
+            xdaiTotalCheckoutValue = xdaiTotalCheckoutValue.add(xDaiEquivalent);
             return (true, uint256(Currency.XDAI));
         }
         return (false, uint256(Currency.NULL));
@@ -360,6 +365,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
             _removeFromBaseBalance(_from, _amount);
             _removeMaxFromRestrictedBaseBalance(_from, _amount);
             _transferXDai(_to, _amount);
+            xdaiTotalCheckoutValue = xdaiTotalCheckoutValue.add(_amount);
             return (true, uint256(Currency.XDAI));
             // IF not and IF the fallback is active, the user will be paying in XGT
         } else if (_useFallback) {
@@ -388,6 +394,9 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
                 } else {
                     _transferXGT(_to, amountAfterFreeze);
                 }
+                xgtTotalCheckoutValue = xgtTotalCheckoutValue.add(
+                    xgtEquivalent
+                );
                 return (true, uint256(Currency.XGT));
             }
         }
