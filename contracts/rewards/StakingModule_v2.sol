@@ -8,7 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "../interfaces/IRewardChest.sol";
 import "../interfaces/IXGTFreezer.sol";
 
-contract StakingModule is
+contract StakingModule_v2 is
     Initializable,
     OwnableUpgradeable,
     PausableUpgradeable
