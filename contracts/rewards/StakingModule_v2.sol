@@ -31,41 +31,52 @@ contract StakingModule_v2 is
         bool rewarded;
     }
 
+    // Tokens & Contracts
     IERC20 public xgt;
     IERC20[] public rewardTokens;
+    IERC20 public stakeToken;
+    IXGTFreezer public freezer;
+    IRewardChest public rewardChest;
+
+    // Addresses
+    address public feeWallet;
+
+    // Authorization & Access
+    mapping(address => bool) public authorized;
+
+    // Reward balances
     mapping(address => uint256) public rewardedTokenBalances;
     uint256 public rewardPerStakedToken;
 
-    IERC20 public stakeToken;
-
-    IXGTFreezer public freezer;
-    address public feeWallet;
-    IRewardChest public rewardChest;
-
-    mapping(address => bool) public authorized;
-
+    // User Specific Info
     mapping(address => UserInfo) public userInfo;
-    Referral[] public referrals;
     mapping(address => mapping(address => uint256)) public userRewards;
 
+    // Tracking Variables
     uint256 public totalStaked;
     uint256 public lastHarvestedTime;
 
+    // Constants
     uint256 public constant YEAR_IN_SECONDS = 31536000;
     uint256 public constant BP_DECIMALS = 10000;
 
+    // Fees and Percentage Values
     uint256 public performanceFee;
     uint256 public harvestReward;
     uint256 public withdrawFee;
     uint256 public withdrawFeePeriod;
 
+    // APY related Variables
     bool public fixedAPYPool;
     uint256[] public stakingAPYs;
     uint256[] public apyRatio;
 
+    // Time Variables
     uint256 public start;
     uint256 public end;
 
+    // Referral System
+    Referral[] public referrals;
     uint256 public referralMinTime;
     uint256 public referralMinAmount;
     mapping(address => uint256) public referralMinAmountSince;
