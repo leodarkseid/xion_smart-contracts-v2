@@ -20,13 +20,14 @@ contract StakingModule_v2 is
         uint256 lastDepositedTime;
         uint256 lastUserActionTime;
         uint256 debt;
-        address referrer;
+        uint256[] referralIDs;
     }
 
     struct Referral {
         address referring;
         address referral;
         uint256 date;
+        bool counted;
         bool rewarded;
     }
 
@@ -44,8 +45,8 @@ contract StakingModule_v2 is
     mapping(address => bool) public authorized;
 
     mapping(address => UserInfo) public userInfo;
-    mapping(address => Referral[]) public referrals;
-    mapping(address => mapping(address => uint256)) public userCallRewards;
+    Referral[] public referrals;
+    mapping(address => mapping(address => uint256)) public userRewards;
 
     uint256 public totalStaked;
     uint256 public lastHarvestedTime;
@@ -54,14 +55,13 @@ contract StakingModule_v2 is
     uint256 public constant BP_DECIMALS = 10000;
 
     uint256 public performanceFee;
-    uint256 public callFee;
+    uint256 public harvestReward;
     uint256 public withdrawFee;
     uint256 public withdrawFeePeriod;
 
     bool public fixedAPYPool;
     uint256[] public stakingAPYs;
     uint256[] public apyRatio;
-    uint256 public apyLimitAmount;
 
     uint256 public start;
     uint256 public end;
@@ -85,7 +85,6 @@ contract StakingModule_v2 is
         address _rewardChest,
         bool _fixedAPYPool,
         uint256[] calldata _stakingAPYs,
-        uint256 _apyLimitAmount,
         uint256 _poolStart,
         uint256 _poolEnd
     ) public initializer {
@@ -94,15 +93,17 @@ contract StakingModule_v2 is
         }
         stakeToken = IERC20(_stakeToken);
 
-        freezer = IXGTFreezer(_freezer);
         xgt = IERC20(0xC25AF3123d2420054c8fcd144c21113aa2853F39);
-        xgt.approve(_freezer, 2**256 - 1);
+        if (_freezer != address(0)) {
+            freezer = IXGTFreezer(_freezer);
+            xgt.approve(_freezer, 2**256 - 1);
+        }
 
         rewardChest = IRewardChest(_rewardChest);
 
         OwnableUpgradeable.__Ownable_init();
         PausableUpgradeable.__Pausable_init();
-        transferOwnership(rewardChest.owner());
+        //transferOwnership(rewardChest.owner());
 
         fixedAPYPool = _fixedAPYPool;
         for (uint256 j = 0; j < _stakingAPYs.length; j++) {
@@ -115,21 +116,21 @@ contract StakingModule_v2 is
                 );
             }
         }
-        if (fixedAPYPool) {
-            apyLimitAmount = _apyLimitAmount;
-        }
 
         if (_poolStart > 0 && _poolEnd > 0) {
             require(
-                _poolStart < _poolEnd && _poolEnd < block.timestamp,
+                _poolStart < _poolEnd && _poolEnd > block.timestamp,
                 "XGT-REWARD-MODULE-WRONG-DATES"
             );
             start = _poolStart;
             end = _poolEnd;
+            lastHarvestedTime = start;
+        } else {
+            lastHarvestedTime = block.timestamp;
         }
 
         performanceFee = 200; // 2%
-        callFee = 25; // 0.25%
+        harvestReward = 25; // 0.25%
         withdrawFee = 10; // 0.1%
         withdrawFeePeriod = 72 hours;
     }
@@ -202,6 +203,26 @@ contract StakingModule_v2 is
         IERC20(_token).transfer(msg.sender, amount);
     }
 
+    function cleanUp() external onlyOwner {
+        if (block.timestamp > end) {
+            // this will withdraw any reward tokens that have not been
+            // allocated for rewards
+            for (uint256 i = 0; i < rewardTokens.length; i++) {
+                uint256 rewardRemainder = balanceOfRewardToken(
+                    address(rewardTokens[i])
+                ).sub(rewardedTokenBalances[address(rewardTokens[i])]);
+                if (rewardRemainder > 0) {
+                    rewardTokens[i].transfer(msg.sender, rewardRemainder);
+                }
+            }
+        }
+        // This will only withdraw any exess staked tokens (accidental sends etc.)
+        uint256 stakeRemainder = balanceOf().sub(totalStaked);
+        if (stakeRemainder > 0) {
+            stakeToken.transfer(msg.sender, stakeRemainder);
+        }
+    }
+
     function pause() external onlyOwner whenNotPaused {
         _pause();
     }
@@ -252,10 +273,26 @@ contract StakingModule_v2 is
                 _referrer,
                 _user,
                 block.timestamp,
+                false,
                 false
             );
-            referrals[_user].push(newRef);
-            referrals[_referrer].push(newRef);
+            referrals.push(newRef);
+            // add the index/id of the referral to both of the users referral id array
+            user.referralIDs.push(referrals.length - 1);
+            userInfo[_referrer].referralIDs.push(referrals.length - 1);
+        }
+
+        for (uint256 i = 0; i < rewardTokens.length; i++) {
+            uint256 rewardTilNow = (
+                user.stake.mul(rewardPerStakedToken).div(10**18)
+            ).sub(user.debt);
+
+            if (i != 0) {
+                rewardTilNow = rewardTilNow.mul(apyRatio[i]).div(BP_DECIMALS);
+            }
+            userRewards[_user][address(rewardTokens[i])] = userRewards[_user][
+                address(rewardTokens[i])
+            ].add(rewardTilNow);
         }
 
         user.stake = user.stake.add(_amount);
@@ -268,7 +305,7 @@ contract StakingModule_v2 is
         totalStaked = totalStaked.add(_amount);
         user.debt = user.stake.mul(rewardPerStakedToken).div(10**18);
         user.lastUserActionTime = block.timestamp;
-        if (_skipLastDepositUpdate) {
+        if (!_skipLastDepositUpdate) {
             user.lastDepositedTime = block.timestamp;
         }
 
@@ -295,7 +332,12 @@ contract StakingModule_v2 is
     }
 
     function _withdraw(address _user, uint256 _withdrawAmount) internal {
-        _harvest(false);
+        // harvest so the rewards are up to date for the withdraw
+        _harvest(true);
+
+        // check all referrals of the user on whether they are due/matured
+        _countDueReferrals(_user);
+
         UserInfo storage user = userInfo[_user];
         require(
             _withdrawAmount > 0,
@@ -307,18 +349,21 @@ contract StakingModule_v2 is
         );
 
         for (uint256 i = 0; i < rewardTokens.length; i++) {
-            uint256 amount = (user.stake.mul(rewardPerStakedToken)).sub(
-                user.debt
-            );
+            uint256 amount = (user.stake.mul(rewardPerStakedToken).div(10**18))
+                .sub(user.debt);
             if (i != 0) {
-                amount = amount.mul(BP_DECIMALS).div(apyRatio[i]);
+                amount = amount.mul(apyRatio[i]).div(BP_DECIMALS);
             }
-            if (userCallRewards[_user][address(rewardTokens[i])] > 0) {
+            if (userRewards[_user][address(rewardTokens[i])] > 0) {
                 amount = amount.add(
-                    userCallRewards[_user][address(rewardTokens[i])]
+                    userRewards[_user][address(rewardTokens[i])]
                 );
-                userCallRewards[_user][address(rewardTokens[i])] = 0;
+                userRewards[_user][address(rewardTokens[i])] = 0;
             }
+            rewardedTokenBalances[
+                address(rewardTokens[i])
+            ] = rewardedTokenBalances[address(rewardTokens[i])].sub(amount);
+
             rewardTokens[i].transfer(_user, amount);
         }
 
@@ -337,7 +382,11 @@ contract StakingModule_v2 is
             uint256 currentWithdrawFee = withdrawAmount.mul(withdrawFee).div(
                 BP_DECIMALS
             );
-            freezer.freeze(currentWithdrawFee);
+            if (stakeToken == xgt) {
+                freezer.freeze(currentWithdrawFee);
+            } else if (feeWallet != address(0)) {
+                stakeToken.transfer(feeWallet, currentWithdrawFee);
+            }
             withdrawAmount = withdrawAmount.sub(currentWithdrawFee);
         }
 
@@ -348,23 +397,22 @@ contract StakingModule_v2 is
     }
 
     function harvest() public whenNotPaused {
-        _harvest(false);
+        if (userInfo[msg.sender].stake > 0) {
+            _harvest(true);
+        } else {
+            _harvest(false);
+        }
     }
 
     function _harvest(bool _storeCallReward) internal {
         if (lastHarvestedTime < block.timestamp) {
+            (uint256 diff, uint256 harvestTime) = _getHarvestDiffAndTime();
+            uint256 baseHarvestAmount = _getHarvestAmount(diff);
+            if (baseHarvestAmount == 0) return;
             for (uint256 i = 0; i < rewardTokens.length; i++) {
-                (
-                    uint256 harvestAmount,
-                    uint256 harvestTime
-                ) = currentHarvestAmount(address(rewardTokens[i]));
-
-                // Update rewards per staked token
-                if (i == 0) {
-                    rewardPerStakedToken = rewardPerStakedToken.add(
-                        harvestAmount.mul(10**18).div(totalStaked)
-                    );
-                }
+                uint256 harvestAmount = baseHarvestAmount.mul(apyRatio[i]).div(
+                    BP_DECIMALS
+                );
 
                 if (rewardTokens[i] == xgt) {
                     require(
@@ -388,30 +436,48 @@ contract StakingModule_v2 is
                     );
                 }
 
-                uint256 currentCallFee = harvestAmount.mul(callFee).div(
-                    BP_DECIMALS
-                );
+                uint256 currentHarvestReward = harvestAmount
+                    .mul(harvestReward)
+                    .div(BP_DECIMALS);
                 if (_storeCallReward) {
-                    userCallRewards[msg.sender][
+                    userRewards[msg.sender][
                         address(rewardTokens[i])
-                    ] = userCallRewards[msg.sender][address(rewardTokens[i])]
-                        .add(currentCallFee);
+                    ] = userRewards[msg.sender][address(rewardTokens[i])].add(
+                        currentHarvestReward
+                    );
+
+                    rewardedTokenBalances[
+                        address(rewardTokens[i])
+                    ] = rewardedTokenBalances[address(rewardTokens[i])].add(
+                        (currentHarvestReward)
+                    );
                 } else {
                     IERC20(address(rewardTokens[i])).transfer(
                         msg.sender,
-                        currentCallFee
+                        currentHarvestReward
                     );
                 }
+
+                uint256 netHarvest = harvestAmount
+                    .sub(currentPerformanceFee)
+                    .sub(currentHarvestReward);
 
                 rewardedTokenBalances[
                     address(rewardTokens[i])
                 ] = rewardedTokenBalances[address(rewardTokens[i])].add(
-                    (
-                        harvestAmount.sub(currentPerformanceFee).sub(
-                            currentCallFee
-                        )
-                    )
+                    (netHarvest)
                 );
+
+                // Update rewards per staked token
+                if (i == 0) {
+                    if (totalStaked > 0) {
+                        rewardPerStakedToken = rewardPerStakedToken.add(
+                            netHarvest.mul(10**18).div(totalStaked)
+                        );
+                    } else {
+                        rewardPerStakedToken = 0;
+                    }
+                }
 
                 require(
                     balanceOfRewardToken(address(rewardTokens[i])) >=
@@ -419,39 +485,34 @@ contract StakingModule_v2 is
                     "XGT-REWARD-MODULE-NOT-ENOUGH-REWARDS"
                 );
 
-                lastHarvestedTime = harvestTime;
                 emit Harvest(msg.sender, currentPerformanceFee);
             }
+            lastHarvestedTime = harvestTime;
         }
     }
 
-    function currentHarvestAmount(address _rewardToken)
+    function currentHarvestAmount(uint256 _rewardTokenIndex)
         public
         view
-        returns (uint256, uint256)
+        returns (uint256)
     {
-        uint256 until = block.timestamp;
-        if (until > end) {
-            until = end;
-        }
-        uint256 diff = until.sub(lastHarvestedTime);
+        (uint256 diff, ) = _getHarvestDiffAndTime();
+        uint256 harvestAmount = _getHarvestAmount(diff);
+        harvestAmount = harvestAmount.mul(apyRatio[_rewardTokenIndex]).div(
+            BP_DECIMALS
+        );
+        return harvestAmount;
+    }
 
-        uint256 index = 0;
-        for (uint256 i = 0; i < rewardTokens.length; i++) {
-            if (address(rewardTokens[i]) == _rewardToken) {
-                index = i;
-                break;
-            }
-        }
-
+    function _getHarvestAmount(uint256 _diff) internal view returns (uint256) {
         uint256 harvestAmount = 0;
         if (fixedAPYPool) {
             // for fixed pools the stakingAPYs variable
             // contains a percentage value
             // to ensure a fixed amount of rewards
-            harvestAmount = balanceOf()
-                .mul(stakingAPYs[index])
-                .mul(diff)
+            harvestAmount = totalStaked
+                .mul(stakingAPYs[0])
+                .mul(_diff)
                 .div(BP_DECIMALS)
                 .div(YEAR_IN_SECONDS);
         } else {
@@ -460,41 +521,45 @@ contract StakingModule_v2 is
             // pool for each second
             // so it is high for low participation
             // and low for high participation
-            harvestAmount = stakingAPYs[index].mul(diff);
+            harvestAmount = stakingAPYs[0].mul(_diff);
         }
-        return (harvestAmount, until);
+        return harvestAmount;
     }
 
-    // function getCurrentUserBalance(address _user)
-    //     public
-    //     view
-    //     returns (uint256)
-    // {
-    //     (uint256 harvestAfterFees, ) = currentHarvestAmount()
-    //         .mul(BP_DECIMALS.sub(performanceFee))
-    //         .div(BP_DECIMALS);
-    //     uint256 balanceAfterHarvest = balanceOf().add(harvestAfterFees);
-    //     if (totalStaked == 0) {
-    //         return 0;
-    //     }
-    //     return balanceAfterHarvest.mul(userInfo[_user].stake).div(totalStaked);
-    // }
+    function _getHarvestDiffAndTime() internal view returns (uint256, uint256) {
+        uint256 until = block.timestamp;
+        if (until > end) {
+            until = end;
+        }
+        return (until.sub(lastHarvestedTime), until);
+    }
 
-    // function getCurrentUserInfo(address _user)
-    //     external
-    //     view
-    //     returns (
-    //         uint256,
-    //         uint256,
-    //         uint256
-    //     )
-    // {
-    //     return (
-    //         getCurrentUserBalance(_user),
-    //         userInfo[_user].deposits,
-    //         userInfo[_user].shares
-    //     );
-    // }
+    function getCurrentUserReward(address _user, uint256 _rewardTokenIndex)
+        external
+        view
+        returns (uint256)
+    {
+        uint256 newHarvestAmount = currentHarvestAmount(_rewardTokenIndex);
+        newHarvestAmount = newHarvestAmount.sub(
+            newHarvestAmount.mul(
+                (performanceFee.add(harvestReward)).div(BP_DECIMALS)
+            )
+        );
+
+        uint256 newRewardPerStakedToken = rewardPerStakedToken.add(
+            newHarvestAmount.mul(10**18).div(totalStaked)
+        );
+
+        uint256 reward = (
+            userInfo[_user].stake.mul(newRewardPerStakedToken).div(10**18)
+        ).sub(userInfo[_user].debt);
+
+        reward = reward.add(
+            userRewards[_user][address(rewardTokens[_rewardTokenIndex])]
+        );
+
+        return reward;
+    }
 
     function balanceOf() public view returns (uint256) {
         return stakeToken.balanceOf(address(this));
@@ -506,6 +571,66 @@ contract StakingModule_v2 is
         returns (uint256)
     {
         return IERC20(_rewardToken).balanceOf(address(this));
+    }
+
+    function redeemReferrals(address _user)
+        external
+        onlyRewardChest
+        returns (uint256 redeemedOfReferrals)
+    {
+        for (uint256 i = 0; i < userInfo[_user].referralIDs.length; i++) {
+            (bool foundDue, ) = _checkReferral(
+                referrals[userInfo[_user].referralIDs[i]],
+                _user
+            );
+            if (foundDue) {
+                referrals[userInfo[_user].referralIDs[i]].rewarded = true;
+                redeemedOfReferrals++;
+            }
+        }
+    }
+
+    function userHasDueReferral(address _user) external view returns (bool) {
+        for (uint256 i = 0; i < userInfo[_user].referralIDs.length; i++) {
+            (bool foundDue, ) = _checkReferral(
+                referrals[userInfo[_user].referralIDs[i]],
+                _user
+            );
+            if (foundDue) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _countDueReferrals(address _user) internal {
+        for (uint256 i = 0; i < userInfo[_user].referralIDs.length; i++) {
+            (bool foundDue, bool counted) = _checkReferral(
+                referrals[userInfo[_user].referralIDs[i]],
+                _user
+            );
+            if (foundDue && !counted) {
+                referrals[userInfo[_user].referralIDs[i]].counted = true;
+            }
+        }
+    }
+
+    function _checkReferral(Referral storage referral, address _user)
+        internal
+        view
+        returns (bool, bool)
+    {
+        if (
+            (referral.referring == _user && // referring user was/is the user
+                !referral.rewarded && // the referral has not been rewarded yet
+                referral.counted) || // the referral has either been counted already
+            (referralMinAmountSince[_user] >= referralMinTime && // or: the referring user did the min time &
+                referralMinAmountSince[referral.referral] >= // the referred user did the min time
+                referralMinTime)
+        ) {
+            return (true, referral.counted);
+        }
+        return (false, false);
     }
 
     // Only for compatibility with reward chest
@@ -542,6 +667,14 @@ contract StakingModule_v2 is
         require(
             authorized[msg.sender],
             "XGT-REWARD-MODULE-CALLER-NOT-AUTHORIZED"
+        );
+        _;
+    }
+
+    modifier onlyRewardChest() {
+        require(
+            msg.sender == address(rewardChest),
+            "XGT-REWARD-CHEST-NOT-AUTHORIZED"
         );
         _;
     }
