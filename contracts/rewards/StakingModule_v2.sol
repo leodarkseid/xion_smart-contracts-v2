@@ -114,7 +114,10 @@ contract StakingModule_v2 is
 
         OwnableUpgradeable.__Ownable_init();
         PausableUpgradeable.__Pausable_init();
-        //transferOwnership(rewardChest.owner());
+
+        if (_rewardChest != address(0)) {
+            transferOwnership(rewardChest.owner());
+        }
 
         fixedAPYPool = _fixedAPYPool;
         for (uint256 j = 0; j < _stakingAPYs.length; j++) {
