@@ -47,6 +47,7 @@ contract StakingModule_v2 is
     // Reward balances
     mapping(address => uint256) public rewardedTokenBalances;
     uint256 public rewardPerStakedToken;
+    bool public withdrawRewardsOnHarvest;
 
     // User Specific Info
     mapping(address => UserInfo) public userInfo;
@@ -68,8 +69,13 @@ contract StakingModule_v2 is
 
     // APY related Variables
     bool public fixedAPYPool;
-    uint256[] public stakingAPYs;
-    uint256[] public apyRatio;
+    APYDetail[] public apyDetails;
+
+    struct APYDetail {
+        uint256 apy;
+        uint256 priceModifier;
+        uint256 calcApy;
+    }
 
     // Time Variables
     uint256 public start;
@@ -121,14 +127,9 @@ contract StakingModule_v2 is
 
         fixedAPYPool = _fixedAPYPool;
         for (uint256 j = 0; j < _stakingAPYs.length; j++) {
-            stakingAPYs.push(_stakingAPYs[j]);
-            if (j == 0) {
-                apyRatio.push(1 * BP_DECIMALS);
-            } else {
-                apyRatio.push(
-                    _stakingAPYs[j].mul(BP_DECIMALS).div(_stakingAPYs[0])
-                );
-            }
+            apyDetails.push(
+                APYDetail(_stakingAPYs[j], 10**18, _stakingAPYs[j].div(10**2))
+            );
         }
 
         if (_poolStart > 0 && _poolEnd > 0) {
@@ -147,10 +148,18 @@ contract StakingModule_v2 is
         harvestReward = 25; // 0.25%
         withdrawFee = 10; // 0.1%
         withdrawFeePeriod = 72 hours;
+        withdrawRewardsOnHarvest = true;
     }
 
     function setAuthorized(address _addr, bool _authorized) external onlyOwner {
         authorized[_addr] = _authorized;
+    }
+
+    function setWithdrawRewardsOnHarvest(bool _withdrawRewardsOnHarvest)
+        external
+        onlyOwner
+    {
+        withdrawRewardsOnHarvest = _withdrawRewardsOnHarvest;
     }
 
     function setReferralVariables(uint256 _minTime, uint256 _minAmount)
@@ -180,23 +189,34 @@ contract StakingModule_v2 is
         withdrawFeePeriod = _withdrawFeePeriod;
     }
 
-    function setStakingAPYs(uint256[] calldata _stakingAPYs)
+    function setStakingAPYs(bool _fixedAPYPool, uint256[] calldata _stakingAPYs)
         external
         onlyOwner
     {
         require(
-            stakingAPYs.length == _stakingAPYs.length,
+            apyDetails.length == _stakingAPYs.length,
             "XGT-REWARD-MODULE-ARRAY-MISMATCH"
         );
-        for (uint256 j = 0; j < _stakingAPYs.length; j++) {
-            stakingAPYs[j] = _stakingAPYs[j];
-            if (j == 0) {
-                apyRatio[0] = 1 * BP_DECIMALS;
-            } else {
-                apyRatio[j] = _stakingAPYs[j].mul(BP_DECIMALS).div(
-                    _stakingAPYs[0]
-                );
-            }
+        fixedAPYPool = _fixedAPYPool;
+        for (uint256 j = 0; j < apyDetails.length; j++) {
+            apyDetails[j].apy = _stakingAPYs[j];
+            apyDetails[j].calcApy = apyDetails[j]
+                .apy
+                .mul(apyDetails[j].priceModifier)
+                .div(10**20); // 10^18 * 100 because of the percent value
+        }
+    }
+
+    function setPriceModifiers(uint256[] calldata _priceModifiers)
+        external
+        onlyAuthorized
+    {
+        for (uint256 j = 0; j < apyDetails.length; j++) {
+            apyDetails[j].priceModifier = _priceModifiers[j];
+            apyDetails[j].calcApy = apyDetails[j]
+                .apy
+                .mul(apyDetails[j].priceModifier)
+                .div(10**20); // 10^18 * 100 because of the percent value
         }
     }
 
@@ -302,7 +322,9 @@ contract StakingModule_v2 is
             ).sub(user.debt);
 
             if (i != 0) {
-                rewardTilNow = rewardTilNow.mul(apyRatio[i]).div(BP_DECIMALS);
+                rewardTilNow = rewardTilNow.mul(apyDetails[i].calcApy).div(
+                    10**18
+                );
             }
             userRewards[_user][address(rewardTokens[i])] = userRewards[_user][
                 address(rewardTokens[i])
@@ -315,6 +337,9 @@ contract StakingModule_v2 is
             referralMinAmountSince[_user] == 0
         ) {
             referralMinAmountSince[_user] = block.timestamp;
+        }
+        if (totalStaked == 0) {
+            lastHarvestedTime = block.timestamp;
         }
         totalStaked = totalStaked.add(_amount);
         user.debt = user.stake.mul(rewardPerStakedToken).div(10**18);
@@ -354,20 +379,16 @@ contract StakingModule_v2 is
 
         UserInfo storage user = userInfo[_user];
         require(
-            _withdrawAmount > 0,
-            "XGT-REWARD-MODULE-NEED-TO-WITHDRAW-MORE-THAN-ZERO"
-        );
-        require(
             _withdrawAmount <= user.stake,
             "XGT-REWARD-MODULE-CANT-WITHDRAW-MORE-THAN-MAXIMUM"
         );
 
         for (uint256 i = 0; i < rewardTokens.length; i++) {
-            uint256 amount = (user.stake.mul(rewardPerStakedToken).div(10**18))
-                .sub(user.debt);
-            if (i != 0) {
-                amount = amount.mul(apyRatio[i]).div(BP_DECIMALS);
-            }
+            uint256 amount = (
+                (user.stake.mul(rewardPerStakedToken).div(10**18)).sub(
+                    user.debt
+                )
+            ).mul(apyDetails[i].calcApy).div(10**18);
             if (userRewards[_user][address(rewardTokens[i])] > 0) {
                 amount = amount.add(
                     userRewards[_user][address(rewardTokens[i])]
@@ -392,27 +413,35 @@ contract StakingModule_v2 is
             referralMinAmountSince[_user] = 0;
         }
 
-        if (block.timestamp < user.lastDepositedTime.add(withdrawFeePeriod)) {
-            uint256 currentWithdrawFee = withdrawAmount.mul(withdrawFee).div(
-                BP_DECIMALS
-            );
-            if (stakeToken == xgt) {
-                freezer.freeze(currentWithdrawFee);
-            } else if (feeWallet != address(0)) {
-                stakeToken.transfer(feeWallet, currentWithdrawFee);
-            }
-            withdrawAmount = withdrawAmount.sub(currentWithdrawFee);
-        }
-
         user.lastUserActionTime = block.timestamp;
-        stakeToken.transfer(_user, withdrawAmount);
 
-        emit Withdraw(_user, withdrawAmount);
+        if (withdrawAmount > 0) {
+            if (
+                block.timestamp < user.lastDepositedTime.add(withdrawFeePeriod)
+            ) {
+                uint256 currentWithdrawFee = withdrawAmount
+                    .mul(withdrawFee)
+                    .div(BP_DECIMALS);
+                if (stakeToken == xgt) {
+                    freezer.freeze(currentWithdrawFee);
+                } else if (feeWallet != address(0)) {
+                    stakeToken.transfer(feeWallet, currentWithdrawFee);
+                }
+                withdrawAmount = withdrawAmount.sub(currentWithdrawFee);
+            }
+
+            stakeToken.transfer(_user, withdrawAmount);
+
+            emit Withdraw(_user, withdrawAmount);
+        }
     }
 
     function harvest() public whenNotPaused {
         if (userInfo[msg.sender].stake > 0) {
             _harvest(true);
+            if (withdrawRewardsOnHarvest) {
+                _withdraw(msg.sender, 0); // withdrawing 0 is equal to withdrawing just the rewards
+            }
         } else {
             _harvest(false);
         }
@@ -424,9 +453,9 @@ contract StakingModule_v2 is
             uint256 baseHarvestAmount = _getHarvestAmount(diff);
             if (baseHarvestAmount == 0) return;
             for (uint256 i = 0; i < rewardTokens.length; i++) {
-                uint256 harvestAmount = baseHarvestAmount.mul(apyRatio[i]).div(
-                    BP_DECIMALS
-                );
+                uint256 harvestAmount = baseHarvestAmount
+                    .mul(apyDetails[i].calcApy)
+                    .div(apyDetails[0].calcApy);
 
                 if (rewardTokens[i] == xgt) {
                     require(
@@ -512,9 +541,9 @@ contract StakingModule_v2 is
     {
         (uint256 diff, ) = _getHarvestDiffAndTime();
         uint256 harvestAmount = _getHarvestAmount(diff);
-        harvestAmount = harvestAmount.mul(apyRatio[_rewardTokenIndex]).div(
-            BP_DECIMALS
-        );
+        harvestAmount = harvestAmount
+            .mul(apyDetails[_rewardTokenIndex].calcApy)
+            .div(apyDetails[0].calcApy);
         return harvestAmount;
     }
 
@@ -525,17 +554,17 @@ contract StakingModule_v2 is
             // contains a percentage value
             // to ensure a fixed amount of rewards
             harvestAmount = totalStaked
-                .mul(stakingAPYs[0])
+                .mul(apyDetails[0].calcApy)
                 .mul(_diff)
-                .div(BP_DECIMALS)
-                .div(YEAR_IN_SECONDS);
+                .div(YEAR_IN_SECONDS)
+                .div(10**18);
         } else {
             // for dynamic pools, the stakingAPYs variable
             // contains the token amount rewarded to the
             // pool for each second
             // so it is high for low participation
             // and low for high participation
-            harvestAmount = stakingAPYs[0].mul(_diff);
+            harvestAmount = apyDetails[0].calcApy.mul(_diff);
         }
         return harvestAmount;
     }
