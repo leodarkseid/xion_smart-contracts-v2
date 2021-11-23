@@ -149,6 +149,9 @@ contract StakingModule_v2 is
         withdrawFee = 10; // 0.1%
         withdrawFeePeriod = 72 hours;
         withdrawRewardsOnHarvest = true;
+
+        referralMinTime = 604800; // 1 week
+        referralMinAmount = 100; // 100 stake tokens
     }
 
     function setAuthorized(address _addr, bool _authorized) external onlyOwner {
@@ -570,6 +573,7 @@ contract StakingModule_v2 is
         view
         returns (uint256)
     {
+        UserInfo storage user = userInfo[_user];
         uint256 newHarvestAmount = currentHarvestAmount(_rewardTokenIndex);
         newHarvestAmount = newHarvestAmount.sub(
             newHarvestAmount.mul(
@@ -582,8 +586,7 @@ contract StakingModule_v2 is
         );
 
         uint256 reward = (
-            (userInfo[_user].stake.mul(newRewardPerStakedToken).div(10**18))
-                .sub(userInfo[_user].debt)
+            (user.stake.mul(newRewardPerStakedToken).div(10**18)).sub(user.debt)
         ).mul(apyDetails[_rewardTokenIndex].calcApy).div(apyDetails[0].calcApy);
 
         reward = reward.add(
