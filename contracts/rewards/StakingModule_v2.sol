@@ -317,15 +317,8 @@ contract StakingModule_v2 is
         }
 
         for (uint256 i = 0; i < rewardTokens.length; i++) {
-            uint256 rewardTilNow = (
-                user.stake.mul(rewardPerStakedToken).div(10**18)
-            ).sub(user.debt);
+            uint256 rewardTilNow = _getUserReward(_user, i);
 
-            if (i != 0) {
-                rewardTilNow = rewardTilNow.mul(apyDetails[i].calcApy).div(
-                    10**18
-                );
-            }
             userRewards[_user][address(rewardTokens[i])] = userRewards[_user][
                 address(rewardTokens[i])
             ].add(rewardTilNow);
@@ -384,11 +377,7 @@ contract StakingModule_v2 is
         );
 
         for (uint256 i = 0; i < rewardTokens.length; i++) {
-            uint256 amount = (
-                (user.stake.mul(rewardPerStakedToken).div(10**18)).sub(
-                    user.debt
-                )
-            ).mul(apyDetails[i].calcApy).div(10**18);
+            uint256 amount = _getUserReward(_user, i);
             if (userRewards[_user][address(rewardTokens[i])] > 0) {
                 amount = amount.add(
                     userRewards[_user][address(rewardTokens[i])]
@@ -447,7 +436,7 @@ contract StakingModule_v2 is
         }
     }
 
-    function _harvest(bool _storeCallReward) internal {
+    function _harvest(bool _storeHarvestReward) internal {
         if (lastHarvestedTime < block.timestamp) {
             (uint256 diff, uint256 harvestTime) = _getHarvestDiffAndTime();
             uint256 baseHarvestAmount = _getHarvestAmount(diff);
@@ -482,7 +471,7 @@ contract StakingModule_v2 is
                 uint256 currentHarvestReward = harvestAmount
                     .mul(harvestReward)
                     .div(BP_DECIMALS);
-                if (_storeCallReward) {
+                if (_storeHarvestReward) {
                     userRewards[msg.sender][
                         address(rewardTokens[i])
                     ] = userRewards[msg.sender][address(rewardTokens[i])].add(
@@ -511,7 +500,6 @@ contract StakingModule_v2 is
                     (netHarvest)
                 );
 
-                // Update rewards per staked token
                 if (i == 0) {
                     if (totalStaked > 0) {
                         rewardPerStakedToken = rewardPerStakedToken.add(
@@ -550,8 +538,8 @@ contract StakingModule_v2 is
     function _getHarvestAmount(uint256 _diff) internal view returns (uint256) {
         uint256 harvestAmount = 0;
         if (fixedAPYPool) {
-            // for fixed pools the stakingAPYs variable
-            // contains a percentage value
+            // for fixed pools the calcApy variable
+            // contains a percentage-like value
             // to ensure a fixed amount of rewards
             harvestAmount = totalStaked
                 .mul(apyDetails[0].calcApy)
@@ -559,7 +547,7 @@ contract StakingModule_v2 is
                 .div(YEAR_IN_SECONDS)
                 .div(10**18);
         } else {
-            // for dynamic pools, the stakingAPYs variable
+            // for dynamic pools, the calcApy variable
             // contains the token amount rewarded to the
             // pool for each second
             // so it is high for low participation
@@ -594,14 +582,29 @@ contract StakingModule_v2 is
         );
 
         uint256 reward = (
-            userInfo[_user].stake.mul(newRewardPerStakedToken).div(10**18)
-        ).sub(userInfo[_user].debt);
+            (userInfo[_user].stake.mul(newRewardPerStakedToken).div(10**18))
+                .sub(userInfo[_user].debt)
+        ).mul(apyDetails[_rewardTokenIndex].calcApy).div(apyDetails[0].calcApy);
 
         reward = reward.add(
             userRewards[_user][address(rewardTokens[_rewardTokenIndex])]
         );
 
         return reward;
+    }
+
+    function _getUserReward(address _user, uint256 _rewardTokenIndex)
+        internal
+        view
+        returns (uint256)
+    {
+        return
+            (
+                (userInfo[_user].stake.mul(rewardPerStakedToken).div(10**18))
+                    .sub(userInfo[_user].debt)
+            ).mul(apyDetails[_rewardTokenIndex].calcApy).div(
+                    apyDetails[0].calcApy
+                );
     }
 
     function balanceOf() public view returns (uint256) {
