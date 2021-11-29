@@ -35,6 +35,8 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
     mapping(uint256 => CashbackLevel) public cashbackLevels;
     uint256 highestCashbackLevel;
 
+    mapping(address => Cashback[]) public monthlyCashbacks;
+
     event CashbackAdded(
         address indexed recipient,
         uint256 amountInUSD,
@@ -93,11 +95,54 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
                 uint256 amountInXGT = cashbackAmount.mul(10**18).div(
                     poolModule.getCurrentAverageXGTPrice()
                 );
-                uint256 vestingEnd = block.timestamp.add(lockupTime);
+                uint256 startTime = _getStartTime(block.timestamp);
+                uint256 endTime = startTime.add(lockupTime);
                 if (lockupTime > 0) {
-                    cashbacks[_recipient].push(
-                        Cashback(amountInXGT, 0, block.timestamp, vestingEnd)
-                    );
+                    bool found = false;
+                    uint256 emptyIndex = 2**256 - 1;
+                    for (
+                        uint256 i = 0;
+                        i < monthlyCashbacks[_recipient].length;
+                        i++
+                    ) {
+                        if (
+                            monthlyCashbacks[_recipient][i].vestingStart ==
+                            startTime
+                        ) {
+                            monthlyCashbacks[_recipient][i]
+                                .amount = monthlyCashbacks[_recipient][i]
+                                .amount
+                                .add(amountInXGT);
+                            found = true;
+                            break;
+                        }
+                        // if there is an empty entry and it's the first we find, store it
+                        if (
+                            monthlyCashbacks[_recipient][i].amount == 0 &&
+                            emptyIndex == 2**256 - 1
+                        ) {
+                            emptyIndex = i;
+                        }
+                    }
+                    if (!found) {
+                        // if we havent found the right entry
+                        // but found an empty one, lets now use this one
+                        if (emptyIndex < 2**256 - 1) {
+                            monthlyCashbacks[_recipient][emptyIndex]
+                                .amount = amountInXGT;
+                            monthlyCashbacks[_recipient][emptyIndex]
+                                .claimedAmount = 0;
+                            monthlyCashbacks[_recipient][emptyIndex]
+                                .vestingStart = startTime;
+                            monthlyCashbacks[_recipient][emptyIndex]
+                                .vestingEnd = endTime;
+                        } else {
+                            // otherwise lets create a new one
+                            monthlyCashbacks[_recipient].push(
+                                Cashback(amountInXGT, 0, startTime, endTime)
+                            );
+                        }
+                    }
                 } else {
                     require(
                         rewardChest.sendInstantClaim(_recipient, amountInXGT),
@@ -109,9 +154,76 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
                     _recipient,
                     cashbackAmount,
                     amountInXGT,
-                    vestingEnd
+                    endTime
                 );
             }
+        }
+    }
+
+    function manualOverrideCashback(address _user, uint256 _amount)
+        external
+        onlyOwner
+    {
+        uint256 startTime = _getStartTime(block.timestamp);
+        uint256 endTime = startTime.add(lockupTime);
+        if (monthlyCashbacks[_user].length == 0) {
+            monthlyCashbacks[_user].push(
+                Cashback(_amount, 0, startTime, endTime)
+            );
+        } else {
+            for (uint256 i = 0; i < monthlyCashbacks[_user].length; i++) {
+                if (monthlyCashbacks[_user][i].vestingStart == startTime) {
+                    monthlyCashbacks[_user][i].amount = monthlyCashbacks[_user][
+                        i
+                    ].amount.add(_amount);
+                }
+            }
+        }
+    }
+
+    function manualResetOfOldStructure(
+        address _user,
+        uint256 _from,
+        uint256 _to
+    ) external onlyOwner {
+        if (cashbacks[_user].length - 1 < _to) {
+            _to = cashbacks[_user].length - 1;
+        }
+        for (uint256 i = _from; i <= _to; i++) {
+            delete cashbacks[_user][i];
+        }
+    }
+
+    function manualUpdateFromOldCashbackStructure(
+        address _user,
+        uint256 _from,
+        uint256 _to
+    ) external {
+        if (cashbacks[_user].length - 1 < _to) {
+            _to = cashbacks[_user].length - 1;
+        }
+        for (uint256 i = _from; i <= _to; i++) {
+            if (
+                cashbacks[_user][i].amount > 0 &&
+                cashbacks[_user][i].claimedAmount < cashbacks[_user][i].amount
+            ) {
+                uint256 newTime = _getStartTime(
+                    cashbacks[_user][i].vestingStart
+                );
+                if (monthlyCashbacks[_user].length == 0) {
+                    monthlyCashbacks[_user].push(
+                        Cashback(0, 0, newTime, newTime.add(lockupTime))
+                    );
+                }
+
+                monthlyCashbacks[_user][0].amount = monthlyCashbacks[_user][0]
+                    .amount
+                    .add(cashbacks[_user][i].amount);
+                monthlyCashbacks[_user][0].claimedAmount = monthlyCashbacks[
+                    _user
+                ][0].claimedAmount.add(cashbacks[_user][i].claimedAmount);
+            }
+            delete cashbacks[_user][i];
         }
     }
 
@@ -145,23 +257,38 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
         return _amount.sub(cashbackLeftToProcess);
     }
 
+    // We group airdrops by months, so we calculate the timestamp of the beginning
+    // of the current month. Technically we are using 1/12th of the seconds
+    // in a year, which still divides the year into 12 parts.
+    function _getStartTime(uint256 _now) internal pure returns (uint256) {
+        uint256 systemStart = 1635724800; // November 1st, 2021 Midnight UTC
+        uint256 month = 2628000; // one month
+        uint256 numMonths = (_now.sub(systemStart)).div(month); // how many months since start
+        return systemStart.add((month.mul(numMonths)));
+    }
+
     function getClaimable(address _recipient) external view returns (uint256) {
         uint256 total = 0;
-        if (cashbacks[_recipient].length > 0) {
-            for (uint256 i = 0; i < cashbacks[_recipient].length; i++) {
-                if (cashbacks[_recipient][i].amount > 0) {
-                    uint256 fullAmount = cashbacks[_recipient][i].amount;
-                    uint256 paid = cashbacks[_recipient][i].claimedAmount;
-                    uint256 totalDuration = cashbacks[_recipient][i]
+        if (monthlyCashbacks[_recipient].length > 0) {
+            for (uint256 i = 0; i < monthlyCashbacks[_recipient].length; i++) {
+                if (
+                    monthlyCashbacks[_recipient][i].amount > 0 &&
+                    monthlyCashbacks[_recipient][i].amount >
+                    monthlyCashbacks[_recipient][i].claimedAmount
+                ) {
+                    uint256 fullAmount = monthlyCashbacks[_recipient][i].amount;
+                    uint256 paid = monthlyCashbacks[_recipient][i]
+                        .claimedAmount;
+                    uint256 totalDuration = monthlyCashbacks[_recipient][i]
                         .vestingEnd
-                        .sub(cashbacks[_recipient][i].vestingStart);
+                        .sub(monthlyCashbacks[_recipient][i].vestingStart);
                     uint256 passedDuration = block.timestamp.sub(
-                        cashbacks[_recipient][i].vestingStart
+                        monthlyCashbacks[_recipient][i].vestingStart
                     );
                     uint256 partInBP = passedDuration.mul(10000).div(
                         totalDuration
                     );
-                    uint256 dueNow = cashbacks[_recipient][i]
+                    uint256 dueNow = monthlyCashbacks[_recipient][i]
                         .amount
                         .mul(partInBP)
                         .div(10000);
@@ -176,48 +303,57 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
     }
 
     function claimModule(address _recipient) external {
-        if (cashbacks[_recipient].length > 0) {
-            Cashback[] storage newCashbackArray;
-            for (uint256 i = 0; i < cashbacks[_recipient].length; i++) {
-                if (cashbacks[_recipient][i].amount > 0) {
-                    uint256 fullAmount = cashbacks[_recipient][i].amount;
-                    uint256 paid = cashbacks[_recipient][i].claimedAmount;
-                    uint256 totalDuration = cashbacks[_recipient][i]
+        if (monthlyCashbacks[_recipient].length > 0) {
+            uint256 totalDue = 0;
+            for (uint256 i = 0; i < monthlyCashbacks[_recipient].length; i++) {
+                if (
+                    monthlyCashbacks[_recipient][i].amount > 0 &&
+                    monthlyCashbacks[_recipient][i].amount >
+                    monthlyCashbacks[_recipient][i].claimedAmount
+                ) {
+                    uint256 fullAmount = monthlyCashbacks[_recipient][i].amount;
+                    uint256 paid = monthlyCashbacks[_recipient][i]
+                        .claimedAmount;
+                    uint256 totalDuration = monthlyCashbacks[_recipient][i]
                         .vestingEnd
-                        .sub(cashbacks[_recipient][i].vestingStart);
+                        .sub(monthlyCashbacks[_recipient][i].vestingStart);
                     uint256 passedDuration = block.timestamp.sub(
-                        cashbacks[_recipient][i].vestingStart
+                        monthlyCashbacks[_recipient][i].vestingStart
                     );
                     uint256 partInBP = passedDuration.mul(10000).div(
                         totalDuration
                     );
-                    uint256 dueNow = cashbacks[_recipient][i]
+                    uint256 dueNow = monthlyCashbacks[_recipient][i]
                         .amount
                         .mul(partInBP)
                         .div(10000);
                     if (paid.add(dueNow) > fullAmount) {
                         dueNow = fullAmount.sub(paid);
-                        cashbacks[_recipient][i].claimedAmount = fullAmount;
+                        monthlyCashbacks[_recipient][i]
+                            .claimedAmount = fullAmount;
                     } else {
-                        cashbacks[_recipient][i].claimedAmount = paid.add(
-                            dueNow
-                        );
+                        monthlyCashbacks[_recipient][i].claimedAmount = paid
+                            .add(dueNow);
                     }
-
-                    require(
-                        rewardChest.addToBalance(_recipient, dueNow),
-                        "XGT-REWARD-MODULE-FAILED-TO-ADD-TO-BALANCE"
-                    );
+                    totalDue = totalDue.add(dueNow);
                     emit CashbackClaimed(
                         _recipient,
-                        cashbacks[_recipient][i].amount
+                        monthlyCashbacks[_recipient][i].amount
                     );
-                    if (fullAmount > cashbacks[_recipient][i].claimedAmount) {
-                        newCashbackArray.push(cashbacks[_recipient][i]);
+                    if (
+                        fullAmount ==
+                        monthlyCashbacks[_recipient][i].claimedAmount
+                    ) {
+                        delete monthlyCashbacks[_recipient][i];
                     }
                 }
             }
-            cashbacks[_recipient] = newCashbackArray;
+            if (totalDue > 0) {
+                require(
+                    rewardChest.addToBalance(_recipient, totalDue),
+                    "XGT-REWARD-MODULE-FAILED-TO-ADD-TO-BALANCE"
+                );
+            }
         }
     }
 
