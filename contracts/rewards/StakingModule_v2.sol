@@ -223,6 +223,14 @@ contract StakingModule_v2 is
         }
     }
 
+    function extendPool(uint256 _newEndDate) external onlyOwner {
+        require(
+            _newEndDate >= block.timestamp,
+            "XGT-REWARD-MODULE-CANT-EXTEND-INTO-THE-PAST"
+        );
+        end = _newEndDate;
+    }
+
     function inCaseTokensGetStuck(address _token) external onlyOwner {
         for (uint256 i = 0; i < rewardTokens.length; i++) {
             require(
@@ -555,7 +563,9 @@ contract StakingModule_v2 is
             // pool for each second
             // so it is high for low participation
             // and low for high participation
-            harvestAmount = apyDetails[0].calcApy.mul(_diff);
+            if (totalStaked > 0) {
+                harvestAmount = apyDetails[0].calcApy.mul(_diff);
+            }
         }
         return harvestAmount;
     }
