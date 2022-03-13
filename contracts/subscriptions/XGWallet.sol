@@ -30,6 +30,8 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
 
     mapping(address => bool) public stakeRevenue;
     mapping(address => UserBalanceSheet) public userBalance;
+    mapping(address => mapping(address => mapping(uint256 => uint256)))
+        public test;
 
     struct UserBalanceSheet {
         uint256 base;
