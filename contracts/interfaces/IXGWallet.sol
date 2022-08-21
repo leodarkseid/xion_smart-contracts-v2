@@ -36,15 +36,15 @@ interface IXGWallet {
         view
         returns (uint256);
 
-    function setAuthorizedAddress(address _address, bool _authorized) external;
-
     function pause() external;
 
     function unpause() external;
 
-    function updateFeeWallet(address _feeWallet) external;
+    function setFeeWallet(address _feeWallet) external;
 
-    function updateSubscriptionsContract(address _subscriptions) external;
+    function setSubscriptionsContract(address _subscriptions) external;
 
-    function updatePurchasesContract(address _purchases) external;
+    function setPurchasesContract(address _purchases) external;
+
+    function transferOwnership(address newOwner) external;
 }
