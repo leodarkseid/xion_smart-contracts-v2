@@ -5,7 +5,7 @@ import "@openzeppelin/contracts-upgradeable/math/SafeMathUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "../interfaces/IXGTFreezer.sol";
-import "../interfaces/IXGSubscriptions.sol";
+import "../interfaces/IXGHub.sol";
 import "../interfaces/IStakingModule.sol";
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -16,16 +16,15 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     IERC20 public xgt;
     IXGTFreezer public freezer;
     IStakingModule public staking;
-    IXGSubscriptions public subscriptions;
+    address public subscriptions;
     address public feeWallet;
-    address public hub;
+    IXGHub public hub;
     address public purchases;
 
     uint256 public FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP;
     uint256 public DEPOSIT_FEE_IN_BP;
     uint256 public WITHDRAW_FEE_IN_BP;
 
-    mapping(address => bool) public authorized;
     mapping(address => bool) public stakeRevenue;
     mapping(address => uint256) public customerBalancesBase;
     mapping(address => uint256) public customerBalancesXGT;
@@ -41,15 +40,12 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     function initialize(
         address _hub,
         address _xgt,
-        address _freezer,
-        address _feeWallet,
-        address _owner
+        address _freezer
     ) external initializer {
-        hub = _hub;
+        hub = IXGHub(_hub);
         xgt = IERC20(_xgt);
         freezer = IXGTFreezer(_freezer);
         xgt.approve(_freezer, 2**256 - 1);
-        feeWallet = _feeWallet;
 
         FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP = 100;
         DEPOSIT_FEE_IN_BP = 0;
@@ -57,39 +53,36 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
 
         OwnableUpgradeable.__Ownable_init();
         PausableUpgradeable.__Pausable_init();
-        transferOwnership(_owner);
+        transferOwnership(OwnableUpgradeable(address(hub)).owner());
     }
 
-    function updateFreezerContract(address _freezer) external onlyOwner {
+    function setFreezerContract(address _freezer) external onlyOwner {
         freezer = IXGTFreezer(_freezer);
         xgt.approve(_freezer, 2**256 - 1);
     }
 
-    function updateXGHub(address _hub) external onlyOwner {
-        hub = _hub;
+    function setXGHub(address _hub) external onlyOwner {
+        hub = IXGHub(_hub);
     }
 
-    function updateStakingModule(address _stakingModule) external onlyOwner {
+    function setStakingModule(address _stakingModule) external onlyOwner {
         staking = IStakingModule(_stakingModule);
     }
 
-    function updateSubscriptionsContract(address _subscriptions)
-        external
-        onlyHub
-    {
-        subscriptions = IXGSubscriptions(_subscriptions);
+    function setSubscriptionsContract(address _subscriptions) external onlyHub {
+        subscriptions = _subscriptions;
     }
 
-    function updatePurchasesContract(address _purchases) external onlyHub {
+    function setPurchasesContract(address _purchases) external onlyHub {
         purchases = _purchases;
     }
 
-    function updateFrozenAmountMerchant(uint256 _freezeBP) external onlyOwner {
+    function setFrozenAmountMerchant(uint256 _freezeBP) external onlyOwner {
         require(_freezeBP <= 10000, "Can't freeze more than 100%");
         FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP = _freezeBP;
     }
 
-    function updateFees(uint256 _depositFeeBP, uint256 _withdrawFeeBP)
+    function setFees(uint256 _depositFeeBP, uint256 _withdrawFeeBP)
         external
         onlyOwner
     {
@@ -101,7 +94,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         DEPOSIT_FEE_IN_BP = _withdrawFeeBP;
     }
 
-    function updateFeeWallet(address _feeWallet) external onlyHub {
+    function setFeeWallet(address _feeWallet) external onlyHub {
         feeWallet = _feeWallet;
     }
 
@@ -116,13 +109,6 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     {
         _unstake(_user);
         stakeRevenue[_user] = _stakeRevenue;
-    }
-
-    function setAuthorizedAddress(address _address, bool _authorized)
-        external
-        onlyHub
-    {
-        authorized[_address] = _authorized;
     }
 
     function pause() external onlyHub whenNotPaused {
@@ -193,7 +179,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         _withdraw(_user, _amount);
     }
 
-    function _withdraw(address _user, uint256 _amount) internal {
+    function _withdraw(address _user, uint256 _amount) internal whenNotPaused {
         require(_user != address(0), "Empty address provided");
         require(
             _amount <= customerBalancesBase[_user],
@@ -220,7 +206,10 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         _withdrawXGT(_user, _amount);
     }
 
-    function _withdrawXGT(address _user, uint256 _amount) internal {
+    function _withdrawXGT(address _user, uint256 _amount)
+        internal
+        whenNotPaused
+    {
         require(_user != address(0), "Empty address provided");
         require(
             _amount <= customerBalancesXGT[_user],
@@ -236,7 +225,10 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         }
     }
 
-    function _transferXDai(address _receiver, uint256 _amount) internal {
+    function _transferXDai(address _receiver, uint256 _amount)
+        internal
+        whenNotPaused
+    {
         uint256 balanceBefore = address(this).balance;
         bool success = false;
         (success, ) = payable(_receiver).call{value: _amount, gas: 2300}("");
@@ -257,14 +249,17 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         address _sender,
         address _receiver,
         uint256 _amount
-    ) internal {
+    ) internal whenNotPaused {
         require(
             xgt.transferFrom(_sender, _receiver, _amount),
             "Token transferFrom failed."
         );
     }
 
-    function _transferXGT(address _receiver, uint256 _amount) internal {
+    function _transferXGT(address _receiver, uint256 _amount)
+        internal
+        whenNotPaused
+    {
         require(xgt.transfer(_receiver, _amount), "Token transfer failed.");
     }
 
@@ -395,7 +390,11 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         return (false, uint256(Currency.NULL));
     }
 
-    function _freeze(address _to, uint256 _amount) internal returns (uint256) {
+    function _freeze(address _to, uint256 _amount)
+        internal
+        whenNotPaused
+        returns (uint256)
+    {
         uint256 freezeAmount = _amount
             .mul(FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP)
             .div(10000);
@@ -403,7 +402,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         return _amount.sub(freezeAmount);
     }
 
-    function _stake(address _for, uint256 _amount) internal {
+    function _stake(address _for, uint256 _amount) internal whenNotPaused {
         (, , uint256 sharesBefore) = staking.getCurrentUserInfo(address(this));
         xgt.approve(address(staking), _amount);
         staking.depositForUser(address(this), _amount, true);
@@ -416,7 +415,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         );
     }
 
-    function _unstake(address _for) internal {
+    function _unstake(address _for) internal whenNotPaused {
         if (merchantStakingShares[_for] > 0) {
             uint256 xgtBefore = xgt.balanceOf(address(this));
             uint256 withdrawShares = merchantStakingShares[_for];
@@ -448,7 +447,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
 
     modifier onlyAuthorized() {
         require(
-            authorized[msg.sender] || msg.sender == owner(),
+            hub.getAuthorizationStatus(msg.sender) || msg.sender == owner(),
             "Not authorized"
         );
         _;
@@ -461,7 +460,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
 
     modifier onlyModule() {
         require(
-            msg.sender == address(subscriptions) ||
+            msg.sender == subscriptions ||
                 msg.sender == purchases ||
                 msg.sender == address(hub),
             "Not authorized"
