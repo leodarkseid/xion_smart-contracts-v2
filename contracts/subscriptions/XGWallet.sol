@@ -21,15 +21,26 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     IXGHub public hub;
     address public purchases;
 
+    uint256 public xdaiTotalCheckoutValue;
+    uint256 public xgtTotalCheckoutValue;
+
     uint256 public FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP;
     uint256 public DEPOSIT_FEE_IN_BP;
     uint256 public WITHDRAW_FEE_IN_BP;
 
     mapping(address => bool) public stakeRevenue;
-    mapping(address => uint256) public customerBalancesBase;
-    mapping(address => uint256) public customerBalancesXGT;
-    mapping(address => uint256) public merchantStakingShares;
-    mapping(address => uint256) public merchantStakingDeposits;
+    mapping(address => UserBalanceSheet) public userBalance;
+    mapping(address => mapping(address => mapping(uint256 => uint256)))
+        public test;
+
+    struct UserBalanceSheet {
+        uint256 base;
+        uint256 restrictedBase;
+        uint256 xgt;
+        uint256 restrictedXGT;
+        uint256 merchantStakingShares;
+        uint256 merchantStakingDeposits;
+    }
 
     enum Currency {
         NULL,
@@ -141,7 +152,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         if (fee > 0) {
             _transferXDai(feeWallet, fee);
         }
-        customerBalancesBase[_user] = customerBalancesBase[_user].add(
+        userBalance[_user].base = userBalance[_user].base.add(
             msg.value.sub(fee)
         );
     }
@@ -165,7 +176,31 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
             _transferFromXGT(_user, feeWallet, fee);
         }
         _transferFromXGT(_user, address(this), rest);
-        customerBalancesXGT[_user] = customerBalancesXGT[_user].add(rest);
+        userBalance[_user].xgt = userBalance[_user].xgt.add(rest);
+    }
+
+    function depositToRestrictredBaseBalanceOfUser(address _user)
+        external
+        payable
+        whenNotPaused
+    {
+        require(_user != address(0), "Empty address provided");
+        userBalance[_user].restrictedBase = userBalance[_user]
+            .restrictedBase
+            .add(msg.value);
+        userBalance[_user].base = userBalance[_user].base.add(msg.value);
+    }
+
+    function depositToRestrictredXGTBalanceOfUser(
+        address _user,
+        uint256 _amount
+    ) external whenNotPaused {
+        require(_user != address(0), "Empty address provided");
+        _transferFromXGT(_user, address(this), _amount);
+        userBalance[_user].restrictedXGT = userBalance[_user].restrictedXGT.add(
+            _amount
+        );
+        userBalance[_user].xgt = userBalance[_user].xgt.add(_amount);
     }
 
     function withdraw(uint256 _amount) public {
@@ -182,10 +217,12 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     function _withdraw(address _user, uint256 _amount) internal whenNotPaused {
         require(_user != address(0), "Empty address provided");
         require(
-            _amount <= customerBalancesBase[_user],
+            _amount <=
+                userBalance[_user].base.sub(userBalance[_user].restrictedBase),
             "Not enough in the users balance."
         );
-        customerBalancesBase[_user] = customerBalancesBase[_user].sub(_amount);
+
+        _removeFromBaseBalance(_user, _amount);
         if (_amount > 0) {
             uint256 fee = (_amount.mul(WITHDRAW_FEE_IN_BP)).div(10000);
             if (fee > 0) {
@@ -212,10 +249,11 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     {
         require(_user != address(0), "Empty address provided");
         require(
-            _amount <= customerBalancesXGT[_user],
+            _amount <=
+                userBalance[_user].xgt.sub(userBalance[_user].restrictedXGT),
             "Not enough in the users balance."
         );
-        customerBalancesXGT[_user] = customerBalancesXGT[_user].sub(_amount);
+        _removeFromXGTBalance(_user, _amount);
         if (_amount > 0) {
             uint256 fee = (_amount.mul(WITHDRAW_FEE_IN_BP)).div(10000);
             if (fee > 0) {
@@ -275,53 +313,39 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
             return (true, uint256(Currency.XGT));
         }
         uint256 xDaiEquivalent = (_amount.mul(_rate)).div(10**18);
-        uint256 xgtLeft = _amount;
+        uint256 xgtLeft = _removeMaxFromXGTBalance(_from, _amount);
 
-        // IF user has enough xgt balance, it will be used
-        if (customerBalancesXGT[_from] >= _amount) {
-            if (customerBalancesXGT[_from] >= _amount) {
-                customerBalancesXGT[_from] = customerBalancesXGT[_from].sub(
-                    _amount
-                );
-                xgtLeft = 0;
-                // IF the users customer balance ƒ XGT is not enough
-                // it will be used up and the rest will be paid via transfer
-            } else {
-                xgtLeft = xgtLeft.sub(customerBalancesXGT[_from]);
-                customerBalancesXGT[_from] = 0;
-            }
-
-            // IF there is a rest from the calulcation above
-            // we use their approved balance
-            if (
-                xgtLeft > 0 &&
-                xgt.allowance(_from, address(this)) >= xgtLeft &&
-                xgt.balanceOf(_from) >= xgtLeft
-            ) {
-                _transferFromXGT(_from, address(this), xgtLeft);
-            }
-            // If all of the XGT has been covered through the two options
-            // the payment has been made, if not it will run into the last return at the bottom of the func
-            if (xgtLeft == 0) {
-                uint256 amountAfterFreeze = _amount;
-                if (_withFreeze) {
-                    amountAfterFreeze = _freeze(_to, _amount);
-                }
-                if (stakeRevenue[_to]) {
-                    _stake(_to, amountAfterFreeze);
-                } else {
-                    _transferXGT(_to, amountAfterFreeze);
-                }
-                return (true, uint256(Currency.XGT));
-            }
-            // IF not and IF the fallback is active, the user will be paying in XDai
-        } else if (
-            _useFallback && customerBalancesBase[_from] >= xDaiEquivalent
+        // IF there is a rest from the calulcation above
+        // we use their approved balance
+        if (
+            xgtLeft > 0 &&
+            xgt.allowance(_from, address(this)) >= xgtLeft &&
+            xgt.balanceOf(_from) >= xgtLeft
         ) {
-            customerBalancesBase[_from] = customerBalancesBase[_from].sub(
-                xDaiEquivalent
-            );
-            _transferXDai(_to, xDaiEquivalent);
+            _transferFromXGT(_from, address(this), xgtLeft);
+            xgtLeft = 0;
+        }
+
+        if (xgtLeft == 0) {
+            _removeMaxFromRestrictedXGTBalance(_from, _amount);
+            uint256 amountAfterFreeze = _amount;
+            if (_withFreeze) {
+                amountAfterFreeze = _freeze(_to, _amount);
+            }
+            if (stakeRevenue[_to]) {
+                _stake(_to, amountAfterFreeze);
+            } else {
+                _transferXGT(_to, amountAfterFreeze);
+            }
+            xgtTotalCheckoutValue = xgtTotalCheckoutValue.add(_amount);
+            return (true, uint256(Currency.XGT));
+        }
+
+        // IF not and IF the fallback is active, the user will be paying in XDai
+        if (_useFallback && userBalance[_from].base >= xDaiEquivalent) {
+            _removeFromBaseBalance(_from, xDaiEquivalent);
+            _removeMaxFromRestrictedBaseBalance(_from, xDaiEquivalent);
+            xdaiTotalCheckoutValue = xdaiTotalCheckoutValue.add(xDaiEquivalent);
             return (true, uint256(Currency.XDAI));
         }
         return (false, uint256(Currency.NULL));
@@ -339,42 +363,30 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
             return (true, uint256(Currency.XDAI));
         }
         // IF user has enough xdai balance, it will be used
-        if (customerBalancesBase[_from] >= _amount) {
-            customerBalancesBase[_from] = customerBalancesBase[_from].sub(
-                _amount
-            );
+        if (userBalance[_from].base >= _amount) {
+            _removeFromBaseBalance(_from, _amount);
+            _removeMaxFromRestrictedBaseBalance(_from, _amount);
             _transferXDai(_to, _amount);
+            xdaiTotalCheckoutValue = xdaiTotalCheckoutValue.add(_amount);
             return (true, uint256(Currency.XDAI));
             // IF not and IF the fallback is active, the user will be paying in XGT
         } else if (_useFallback) {
             uint256 xgtEquivalent = (_amount.mul(10**18)).div(_rate);
-            uint256 xgtLeft = xgtEquivalent;
-            // IF the user has XGT in their customer balance, it will be used
-            if (customerBalancesXGT[_from] > 0) {
-                if (customerBalancesXGT[_from] >= xgtEquivalent) {
-                    customerBalancesXGT[_from] = customerBalancesXGT[_from].sub(
-                        xgtEquivalent
-                    );
-                    xgtLeft = 0;
-                    // IF the users customer balance of XGT is not enough
-                    // it will be used up and the rest will be paid via transfer
-                } else {
-                    xgtLeft = xgtLeft.sub(customerBalancesXGT[_from]);
-                    customerBalancesXGT[_from] = 0;
-                }
-            }
-            // IF there is a rest from the calulcation above
-            // we use their approved balance
+            uint256 xgtLeft = _removeMaxFromXGTBalance(_from, xgtEquivalent);
+
             if (
                 xgtLeft > 0 &&
                 xgt.allowance(_from, address(this)) >= xgtLeft &&
                 xgt.balanceOf(_from) >= xgtLeft
             ) {
                 _transferFromXGT(_from, address(this), xgtLeft);
+                xgtLeft = 0;
             }
             // If all of the XGT has been covered through the two options
             // the payment has been made, if not it will run into the last return at the bottom of the func
             if (xgtLeft == 0) {
+                _removeMaxFromRestrictedXGTBalance(_from, xgtEquivalent);
+
                 uint256 amountAfterFreeze = xgtEquivalent;
                 if (_withFreeze) {
                     amountAfterFreeze = _freeze(_to, xgtEquivalent);
@@ -384,6 +396,9 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
                 } else {
                     _transferXGT(_to, amountAfterFreeze);
                 }
+                xgtTotalCheckoutValue = xgtTotalCheckoutValue.add(
+                    xgtEquivalent
+                );
                 return (true, uint256(Currency.XGT));
             }
         }
@@ -407,42 +422,124 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         xgt.approve(address(staking), _amount);
         staking.depositForUser(address(this), _amount, true);
         (, , uint256 sharesAfter) = staking.getCurrentUserInfo(address(this));
-        merchantStakingShares[_for] = merchantStakingShares[_for].add(
-            sharesAfter.sub(sharesBefore)
-        );
-        merchantStakingDeposits[_for] = merchantStakingDeposits[_for].add(
-            _amount
-        );
+        userBalance[_for].merchantStakingShares = userBalance[_for]
+            .merchantStakingShares
+            .add(sharesAfter.sub(sharesBefore));
+        userBalance[_for].merchantStakingDeposits = userBalance[_for]
+            .merchantStakingDeposits
+            .add(_amount);
     }
 
     function _unstake(address _for) internal whenNotPaused {
-        if (merchantStakingShares[_for] > 0) {
+        if (userBalance[_for].merchantStakingShares > 0) {
             uint256 xgtBefore = xgt.balanceOf(address(this));
-            uint256 withdrawShares = merchantStakingShares[_for];
-            merchantStakingShares[_for] = 0;
-            merchantStakingDeposits[_for] = 0;
+            uint256 withdrawShares = userBalance[_for].merchantStakingShares;
+            userBalance[_for].merchantStakingShares = 0;
+            userBalance[_for].merchantStakingDeposits = 0;
             staking.withdraw(withdrawShares);
             uint256 xgtAfter = xgt.balanceOf(address(this));
             _transferXGT(_for, xgtAfter.sub(xgtBefore));
         }
     }
 
+    function _removeFromBaseBalance(address _user, uint256 _amount) internal {
+        userBalance[_user].base = userBalance[_user].base.sub(_amount);
+    }
+
+    function _removeFromRestrictedBaseBalance(address _user, uint256 _amount)
+        internal
+    {
+        userBalance[_user].restrictedBase = userBalance[_user]
+            .restrictedBase
+            .sub(_amount);
+    }
+
+    function _removeMaxFromRestrictedBaseBalance(address _user, uint256 _amount)
+        internal
+    {
+        if (_amount >= userBalance[_user].restrictedBase) {
+            _removeFromRestrictedBaseBalance(
+                _user,
+                userBalance[_user].restrictedBase
+            );
+        } else {
+            _removeFromRestrictedBaseBalance(_user, _amount);
+        }
+    }
+
+    function _removeFromXGTBalance(address _user, uint256 _amount) internal {
+        userBalance[_user].xgt = userBalance[_user].xgt.sub(_amount);
+    }
+
+    function _removeMaxFromXGTBalance(address _user, uint256 _amount)
+        internal
+        returns (uint256)
+    {
+        if (_amount >= userBalance[_user].xgt) {
+            uint256 usedBalance = userBalance[_user].xgt;
+            if (usedBalance > 0) {
+                _removeFromXGTBalance(_user, usedBalance);
+            }
+            return _amount.sub(usedBalance);
+        } else {
+            _removeFromXGTBalance(_user, _amount);
+            return 0;
+        }
+    }
+
+    function _removeFromRestrictedXGTBalance(address _user, uint256 _amount)
+        internal
+    {
+        userBalance[_user].restrictedXGT = userBalance[_user].restrictedXGT.sub(
+            _amount
+        );
+    }
+
+    function _removeMaxFromRestrictedXGTBalance(address _user, uint256 _amount)
+        internal
+    {
+        if (_amount >= userBalance[_user].restrictedXGT) {
+            _removeFromRestrictedXGTBalance(
+                _user,
+                userBalance[_user].restrictedXGT
+            );
+        } else {
+            _removeFromRestrictedXGTBalance(_user, _amount);
+        }
+    }
+
     function getUserXGTBalance(address _user) external view returns (uint256) {
-        uint256 xgtBalance = customerBalancesXGT[_user];
-        if (merchantStakingShares[_user] > 0) {
+        uint256 xgtBalance = userBalance[_user].xgt;
+        if (userBalance[_user].merchantStakingDeposits > 0) {
             (uint256 stakingBalance, , uint256 stakingShares) = staking
                 .getCurrentUserInfo(address(this));
             xgtBalance = xgtBalance.add(
-                stakingBalance.mul(merchantStakingShares[_user]).div(
-                    stakingShares
-                )
+                stakingBalance
+                    .mul(userBalance[_user].merchantStakingDeposits)
+                    .div(stakingShares)
             );
         }
         return xgtBalance;
     }
 
+    function getUserRestrictedXGTBalance(address _user)
+        external
+        view
+        returns (uint256)
+    {
+        return userBalance[_user].restrictedXGT;
+    }
+
     function getUserXDaiBalance(address _user) external view returns (uint256) {
-        return customerBalancesBase[_user];
+        return userBalance[_user].base;
+    }
+
+    function getUserRestrictedXDaiBalance(address _user)
+        external
+        view
+        returns (uint256)
+    {
+        return userBalance[_user].restrictedBase;
     }
 
     modifier onlyAuthorized() {

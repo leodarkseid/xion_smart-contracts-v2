@@ -89,10 +89,9 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
     {
         uint256 cashbackAmount = _processCashback(_amount);
         if (cashbackAmount > 0) {
-            uint256 amountInXGT =
-                cashbackAmount.mul(10**18).div(
-                    poolModule.getCurrentAverageXGTPrice()
-                );
+            uint256 amountInXGT = cashbackAmount.mul(10**18).div(
+                poolModule.getCurrentAverageXGTPrice()
+            );
             uint256 vestingEnd = block.timestamp.add(lockupTime);
             if (lockupTime > 0) {
                 cashbacks[_recipient].push(
@@ -123,10 +122,9 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
                 cashbackLevels[i].tvlRequired <= currentTVL &&
                 cashbackLevels[i].totalAmount > cashbackLevels[i].usedAmount
             ) {
-                uint256 leftOnThisLevel =
-                    cashbackLevels[i].totalAmount.sub(
-                        cashbackLevels[i].usedAmount
-                    );
+                uint256 leftOnThisLevel = cashbackLevels[i].totalAmount.sub(
+                    cashbackLevels[i].usedAmount
+                );
                 if (leftOnThisLevel >= cashbackLeftToProcess) {
                     cashbackLevels[i].usedAmount = cashbackLevels[i]
                         .usedAmount
@@ -151,15 +149,17 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
             for (uint256 i = 0; i < cashbacks[_recipient].length; i++) {
                 uint256 fullAmount = cashbacks[_recipient][i].amount;
                 uint256 paid = cashbacks[_recipient][i].claimedAmount;
-                uint256 totalDuration =
-                    cashbacks[_recipient][i].vestingEnd.sub(
-                        cashbacks[_recipient][i].vestingStart
-                    );
-                uint256 passedDuration =
-                    block.timestamp.sub(cashbacks[_recipient][i].vestingStart);
+                uint256 totalDuration = cashbacks[_recipient][i].vestingEnd.sub(
+                    cashbacks[_recipient][i].vestingStart
+                );
+                uint256 passedDuration = block.timestamp.sub(
+                    cashbacks[_recipient][i].vestingStart
+                );
                 uint256 partInBP = passedDuration.mul(10000).div(totalDuration);
-                uint256 dueNow =
-                    cashbacks[_recipient][i].amount.mul(partInBP).div(10000);
+                uint256 dueNow = cashbacks[_recipient][i]
+                    .amount
+                    .mul(partInBP)
+                    .div(10000);
                 if (paid.add(dueNow) > fullAmount) {
                     dueNow = fullAmount.sub(paid);
                 }
@@ -175,15 +175,17 @@ contract CashbackModule is Initializable, OwnableUpgradeable {
             for (uint256 i = 0; i < cashbacks[_recipient].length; i++) {
                 uint256 fullAmount = cashbacks[_recipient][i].amount;
                 uint256 paid = cashbacks[_recipient][i].claimedAmount;
-                uint256 totalDuration =
-                    cashbacks[_recipient][i].vestingEnd.sub(
-                        cashbacks[_recipient][i].vestingStart
-                    );
-                uint256 passedDuration =
-                    block.timestamp.sub(cashbacks[_recipient][i].vestingStart);
+                uint256 totalDuration = cashbacks[_recipient][i].vestingEnd.sub(
+                    cashbacks[_recipient][i].vestingStart
+                );
+                uint256 passedDuration = block.timestamp.sub(
+                    cashbacks[_recipient][i].vestingStart
+                );
                 uint256 partInBP = passedDuration.mul(10000).div(totalDuration);
-                uint256 dueNow =
-                    cashbacks[_recipient][i].amount.mul(partInBP).div(10000);
+                uint256 dueNow = cashbacks[_recipient][i]
+                    .amount
+                    .mul(partInBP)
+                    .div(10000);
                 if (paid.add(dueNow) > fullAmount) {
                     dueNow = fullAmount.sub(paid);
                     cashbacks[_recipient][i].claimedAmount = fullAmount;

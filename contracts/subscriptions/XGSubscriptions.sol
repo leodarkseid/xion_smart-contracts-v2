@@ -81,8 +81,17 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         uint256 processID
     );
 
-    event PauseSubscriptionsByMerchant(bytes32 productID, uint256 processID);
-    event UnpauseSubscriptionsByMerchant(bytes32 productID, uint256 processID);
+    event PauseProductByMerchant(bytes32 productID, uint256 processID);
+    event UnpauseProductByMerchant(bytes32 productID, uint256 processID);
+
+    event PauseSubscriptionByMerchant(
+        bytes32 subscriptionID,
+        uint256 processID
+    );
+    event UnpauseSubscriptionByMerchant(
+        bytes32 subscriptionID,
+        uint256 processID
+    );
 
     function initialize(address _hub, address _dateTimeLib)
         external
@@ -282,29 +291,77 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         );
     }
 
-    function pauseSubscriptionsByMerchant(bytes32 productId, uint256 processID)
+    function pauseProductAsMerchant(bytes32 productId, uint256 processID)
         public
         onlyAuthorized
         whenNotPaused
     {
         productPaused[productId] = true;
-        emit PauseSubscriptionsByMerchant(productId, processID);
+        emit PauseProductByMerchant(productId, processID);
     }
 
-    function activateSubscriptionsByMerchant(
-        bytes32 productId,
-        uint256 processID
-    ) public onlyAuthorized whenNotPaused {
+    function unpauseProductAsMerchant(bytes32 productId, uint256 processID)
+        public
+        onlyAuthorized
+        whenNotPaused
+    {
         productPaused[productId] = false;
-        emit UnpauseSubscriptionsByMerchant(productId, processID);
+        emit UnpauseProductByMerchant(productId, processID);
     }
 
-    function unsubscribeBatchByMerchant(
+    function unsubscribeAsMerchant(
         bytes32[] calldata subscriptionIds,
         uint256 processID
     ) public onlyAuthorized whenNotPaused {
         for (uint256 i = 0; i < subscriptionIds.length; i++) {
             cancelSubscription(subscriptionIds[i], processID);
+        }
+    }
+
+    function resubscribeAsMerchant(
+        bytes32[] calldata subscriptionIds,
+        uint256 processID
+    ) public onlyAuthorized whenNotPaused {
+        for (uint256 i = 0; i < subscriptionIds.length; i++) {
+            activateSubscription(subscriptionIds[i], processID);
+        }
+    }
+
+    function pauseSubscriptionsAsMerchant(
+        bytes32[] calldata subscriptionIds,
+        uint256 processID
+    ) public onlyAuthorized whenNotPaused {
+        for (uint256 i = 0; i < subscriptionIds.length; i++) {
+            bytes32 subscription = subscriptionIds[i];
+            require(
+                subscriptions[subscription].status != Status.PAUSED &&
+                    subscriptions[subscription].status != Status.UNSUBSCRIBED,
+                "Subscription is already paused"
+            );
+
+            subscriptions[subscription].status = Status.PAUSED;
+            emit PauseSubscriptionByMerchant(subscription, processID);
+            (subscriptions[subscription].productId, processID);
+        }
+    }
+
+    function unpauseSubscriptionsAsMerchant(
+        bytes32[] calldata subscriptionIds,
+        uint256 processID
+    ) public onlyAuthorized whenNotPaused {
+        for (uint256 i = 0; i < subscriptionIds.length; i++) {
+            bytes32 subscription = subscriptionIds[i];
+            require(
+                subscriptions[subscription].status == Status.PAUSED &&
+                    subscriptions[subscription].status != Status.UNSUBSCRIBED,
+                "Subscription is not paused"
+            );
+
+            subscriptions[subscription].status = Status.ACTIVE;
+            emit UnpauseSubscriptionByMerchant(
+                subscriptions[subscription].productId,
+                processID
+            );
         }
     }
 
@@ -318,12 +375,13 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             subscriptions[subscriptionId].status == Status.PAUSED
         ) {
             subscriptions[subscriptionId].status = Status.UNSUBSCRIBED;
+
+            emit CancelSubscription(
+                subscriptions[subscriptionId].user,
+                subscriptionId,
+                processID
+            );
         }
-        emit CancelSubscription(
-            subscriptions[subscriptionId].user,
-            subscriptionId,
-            processID
-        );
     }
 
     function pauseSubscription(
