@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity 0.7.6;
 
-import "@openzeppelin/contracts-upgradeable/math/SafeMathUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+// Baal: check version of openzeppelin
+import "@openzeppelin/contracts-upgradeable@3.4.0/math/SafeMathUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable@3.4.0/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable@3.4.0/utils/PausableUpgradeable.sol";
 import "../interfaces/IXGHub.sol";
 
 contract XGFeatureRegistry is OwnableUpgradeable, PausableUpgradeable {

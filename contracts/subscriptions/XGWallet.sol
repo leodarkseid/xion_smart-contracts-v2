@@ -1,18 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity 0.7.6;
 
-import "@openzeppelin/contracts-upgradeable/math/SafeMathUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+// Baal: check version of openzeppelin
+import "@openzeppelin/contracts-upgradeable@3.4.0/math/SafeMathUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable@3.4.0/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable@3.4.0/utils/PausableUpgradeable.sol";
 import "../interfaces/IXGTFreezer.sol";
 import "../interfaces/IXGHub.sol";
 import "../interfaces/IStakingModule.sol";
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts@3.4.0/token/ERC20/IERC20.sol";
+
+// Baal: Adapted the contract to support USDT payments. A few random caveats & thoughts:
+// 1. Replaced xDai payments codepath with Matic. Since Matic is non-stable, maybe that is not desirable.
+// 2. Added USDT path uses similar code as XGT path. Recommend factoring out this code.
+// 3. Support for additional payment options can easily be added once/if 2. is done.
+// 4. Did not rename functions with typos in them, but recommend doing so.
+// 5. Recommend upgrading to solidity 0.8 and getting rid of SafeMath.
+// 6. Much of the code below seems like it could be simplified significantly.
+// 7. Testing, testing, testing! Contract had no unit tests and changes are untested.
 
 contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     using SafeMathUpgradeable for uint256;
 
+    IERC20 public usdt;
     IERC20 public xgt;
     IXGTFreezer public freezer;
     IStakingModule public staking;
@@ -21,7 +32,8 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     IXGHub public hub;
     address public purchases;
 
-    uint256 public xdaiTotalCheckoutValue;
+    uint256 public maticTotalCheckoutValue;
+    uint256 public usdtTotalCheckoutValue;
     uint256 public xgtTotalCheckoutValue;
 
     uint256 public FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP;
@@ -36,6 +48,8 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     struct UserBalanceSheet {
         uint256 base;
         uint256 restrictedBase;
+        uint256 usdt;
+        uint256 restrictedUSDT;
         uint256 xgt;
         uint256 restrictedXGT;
         uint256 merchantStakingShares;
@@ -44,18 +58,22 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
 
     enum Currency {
         NULL,
-        XDAI,
+        MATIC,
+        USDT,
         XGT
     }
 
     function initialize(
         address _hub,
+        address _usdt,
         address _xgt,
         address _freezer
     ) external initializer {
         hub = IXGHub(_hub);
+        usdt = IERC20(_usdt);
         xgt = IERC20(_xgt);
         freezer = IXGTFreezer(_freezer);
+        usdt.approve(_freezer, 2**256 - 1);
         xgt.approve(_freezer, 2**256 - 1);
 
         FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP = 100;
@@ -69,6 +87,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
 
     function setFreezerContract(address _freezer) external onlyOwner {
         freezer = IXGTFreezer(_freezer);
+        usdt.approve(_freezer, 2**256 - 1);
         xgt.approve(_freezer, 2**256 - 1);
     }
 
@@ -150,11 +169,33 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         require(_user != address(0), "Empty address provided");
         uint256 fee = (msg.value.mul(DEPOSIT_FEE_IN_BP)).div(10000);
         if (fee > 0) {
-            _transferXDai(feeWallet, fee);
+            _transferMatic(feeWallet, fee);
         }
         userBalance[_user].base = userBalance[_user].base.add(
             msg.value.sub(fee)
         );
+    }
+
+    function depositUSDT(uint256 _amount) external {
+        _depositUSDT(msg.sender, _amount);
+    }
+
+    function depositUSDTForUser(address _user, uint256 _amount) external {
+        _depositUSDT(_user, _amount);
+    }
+
+    function _depositUSDT(address _user, uint256 _amount)
+        internal
+        whenNotPaused
+    {
+        require(_user != address(0), "Empty address provided");
+        uint256 fee = (_amount.mul(DEPOSIT_FEE_IN_BP)).div(10000);
+        uint256 rest = _amount.sub(fee);
+        if (fee > 0) {
+            _transferFromUSDT(_user, feeWallet, fee);
+        }
+        _transferFromUSDT(_user, address(this), rest);
+        userBalance[_user].usdt = userBalance[_user].usdt.add(rest);
     }
 
     function depositXGT(uint256 _amount) external {
@@ -179,6 +220,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         userBalance[_user].xgt = userBalance[_user].xgt.add(rest);
     }
 
+    // Baal: spelling!
     function depositToRestrictredBaseBalanceOfUser(address _user)
         external
         payable
@@ -191,6 +233,20 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         userBalance[_user].base = userBalance[_user].base.add(msg.value);
     }
 
+    // Baal: spelling!
+    function depositToRestrictredUSDTBalanceOfUser(
+        address _user,
+        uint256 _amount
+    ) external whenNotPaused {
+        require(_user != address(0), "Empty address provided");
+        _transferFromUSDT(_user, address(this), _amount);
+        userBalance[_user].restrictedUSDT = userBalance[_user].restrictedUSDT.add(
+            _amount
+        );
+        userBalance[_user].usdt = userBalance[_user].usdt.add(_amount);
+    }
+
+    // Baal: spelling!
     function depositToRestrictredXGTBalanceOfUser(
         address _user,
         uint256 _amount
@@ -226,10 +282,21 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         if (_amount > 0) {
             uint256 fee = (_amount.mul(WITHDRAW_FEE_IN_BP)).div(10000);
             if (fee > 0) {
-                _transferXDai(feeWallet, fee);
+                _transferMatic(feeWallet, fee);
             }
-            _transferXDai(_user, _amount.sub(fee));
+            _transferMatic(_user, _amount.sub(fee));
         }
+    }
+
+    function withdrawUSDT(uint256 _amount) public {
+        _withdrawUSDT(msg.sender, _amount);
+    }
+
+    function withdrawUSDTForUser(address _user, uint256 _amount)
+        public
+        onlyAuthorized
+    {
+        _withdrawUSDT(_user, _amount);
     }
 
     function withdrawXGT(uint256 _amount) public {
@@ -241,6 +308,26 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         onlyAuthorized
     {
         _withdrawXGT(_user, _amount);
+    }
+
+    function _withdrawUSDT(address _user, uint256 _amount)
+        internal
+        whenNotPaused
+    {
+        require(_user != address(0), "Empty address provided");
+        require(
+            _amount <=
+                userBalance[_user].usdt.sub(userBalance[_user].restrictedUSDT),
+            "Not enough in the users balance."
+        );
+        _removeFromUSDTBalance(_user, _amount);
+        if (_amount > 0) {
+            uint256 fee = (_amount.mul(WITHDRAW_FEE_IN_BP)).div(10000);
+            if (fee > 0) {
+                _transferUSDT(feeWallet, fee);
+            }
+            _transferUSDT(_user, _amount.sub(fee));
+        }
     }
 
     function _withdrawXGT(address _user, uint256 _amount)
@@ -263,7 +350,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         }
     }
 
-    function _transferXDai(address _receiver, uint256 _amount)
+    function _transferMatic(address _receiver, uint256 _amount)
         internal
         whenNotPaused
     {
@@ -279,8 +366,26 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         }
         require(
             success && balanceBefore.sub(balanceAfter) == _amount,
-            "XDai Transfer failed."
+            "Matic Transfer failed."
         );
+    }
+
+    function _transferFromUSDT(
+        address _sender,
+        address _receiver,
+        uint256 _amount
+    ) internal whenNotPaused {
+        require(
+            usdt.transferFrom(_sender, _receiver, _amount),
+            "Token transferFrom failed."
+        );
+    }
+
+    function _transferUSDT(address _receiver, uint256 _amount)
+        internal
+        whenNotPaused
+    {
+        require(usdt.transfer(_receiver, _amount), "Token transfer failed.");
     }
 
     function _transferFromXGT(
@@ -301,6 +406,58 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         require(xgt.transfer(_receiver, _amount), "Token transfer failed.");
     }
 
+    // Baal: I am not sure whether a fallback to MATIC is required here
+    function payWithUSDT(
+        address _from,
+        address _to,
+        uint256 _amount,
+        uint256 _rate,  // Baal: assumed to be price of MATIC in USDT in wei
+        bool _withFreeze,
+        bool _useFallback
+    ) external onlyModule returns (bool, uint256) {
+        if (_amount == 0) {
+            return (true, uint256(Currency.USDT));
+        }
+        uint256 maticEquivalent = (_amount.mul(_rate)).div(10**18);
+        uint256 usdtLeft = _removeMaxFromUSDTBalance(_from, _amount);
+
+        // IF there is a rest from the calulcation above
+        // we use their approved balance
+        if (
+            usdtLeft > 0 &&
+            usdt.allowance(_from, address(this)) >= usdtLeft &&
+            usdt.balanceOf(_from) >= usdtLeft
+        ) {
+            _transferFromXGT(_from, address(this), usdtLeft);
+            usdtLeft = 0;
+        }
+
+        if (usdtLeft == 0) {
+            _removeMaxFromRestrictedUSDTBalance(_from, _amount);
+            uint256 amountAfterFreeze = _amount;
+            if (_withFreeze) {
+                amountAfterFreeze = _freeze(_to, _amount);
+            }
+            if (stakeRevenue[_to]) {
+                _stake(_to, amountAfterFreeze);
+            } else {
+                _transferUSDT(_to, amountAfterFreeze);
+            }
+            usdtTotalCheckoutValue = usdtTotalCheckoutValue.add(_amount);
+            return (true, uint256(Currency.USDT));
+        }
+
+        // IF not and IF the fallback is active, the user will be paying in MATIC
+        if (_useFallback && userBalance[_from].base >= maticEquivalent) {
+            _removeFromBaseBalance(_from, maticEquivalent);
+            _removeMaxFromRestrictedBaseBalance(_from, maticEquivalent);
+            maticTotalCheckoutValue = maticTotalCheckoutValue.add(maticEquivalent);
+            return (true, uint256(Currency.MATIC));
+        }
+        return (false, uint256(Currency.NULL));
+    }
+
+    // Baal: Fallback to MATIC or USDT (or both)?
     function payWithXGT(
         address _from,
         address _to,
@@ -312,7 +469,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         if (_amount == 0) {
             return (true, uint256(Currency.XGT));
         }
-        uint256 xDaiEquivalent = (_amount.mul(_rate)).div(10**18);
+        uint256 maticEquivalent = (_amount.mul(_rate)).div(10**18);
         uint256 xgtLeft = _removeMaxFromXGTBalance(_from, _amount);
 
         // IF there is a rest from the calulcation above
@@ -341,17 +498,18 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
             return (true, uint256(Currency.XGT));
         }
 
-        // IF not and IF the fallback is active, the user will be paying in XDai
-        if (_useFallback && userBalance[_from].base >= xDaiEquivalent) {
-            _removeFromBaseBalance(_from, xDaiEquivalent);
-            _removeMaxFromRestrictedBaseBalance(_from, xDaiEquivalent);
-            xdaiTotalCheckoutValue = xdaiTotalCheckoutValue.add(xDaiEquivalent);
-            return (true, uint256(Currency.XDAI));
+        // IF not and IF the fallback is active, the user will be paying in MATIC
+        if (_useFallback && userBalance[_from].base >= maticEquivalent) {
+            _removeFromBaseBalance(_from, maticEquivalent);
+            _removeMaxFromRestrictedBaseBalance(_from, maticEquivalent);
+            maticTotalCheckoutValue = maticTotalCheckoutValue.add(maticEquivalent);
+            return (true, uint256(Currency.MATIC));
         }
         return (false, uint256(Currency.NULL));
     }
 
-    function payWithXDai(
+    // Baal: Fallback to XGT or USDT (or both)?
+    function payWithMatic(
         address _from,
         address _to,
         uint256 _amount,
@@ -360,15 +518,15 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         bool _useFallback
     ) external onlyModule returns (bool, uint256) {
         if (_amount == 0) {
-            return (true, uint256(Currency.XDAI));
+            return (true, uint256(Currency.MATIC));
         }
-        // IF user has enough xdai balance, it will be used
+        // IF user has enough matic balance, it will be used
         if (userBalance[_from].base >= _amount) {
             _removeFromBaseBalance(_from, _amount);
             _removeMaxFromRestrictedBaseBalance(_from, _amount);
-            _transferXDai(_to, _amount);
-            xdaiTotalCheckoutValue = xdaiTotalCheckoutValue.add(_amount);
-            return (true, uint256(Currency.XDAI));
+            _transferMatic(_to, _amount);
+            maticTotalCheckoutValue = maticTotalCheckoutValue.add(_amount);
+            return (true, uint256(Currency.MATIC));
             // IF not and IF the fallback is active, the user will be paying in XGT
         } else if (_useFallback) {
             uint256 xgtEquivalent = (_amount.mul(10**18)).div(_rate);
@@ -467,6 +625,47 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         }
     }
 
+    function _removeFromUSDTBalance(address _user, uint256 _amount) internal {
+        userBalance[_user].usdt = userBalance[_user].usdt.sub(_amount);
+    }
+
+    function _removeMaxFromUSDTBalance(address _user, uint256 _amount)
+        internal
+        returns (uint256)
+    {
+        if (_amount >= userBalance[_user].usdt) {
+            uint256 usedBalance = userBalance[_user].usdt;
+            if (usedBalance > 0) {
+                _removeFromUSDTBalance(_user, usedBalance);
+            }
+            return _amount.sub(usedBalance);
+        } else {
+            _removeFromUSDTBalance(_user, _amount);
+            return 0;
+        }
+    }
+
+    function _removeFromRestrictedUSDTBalance(address _user, uint256 _amount)
+        internal
+    {
+        userBalance[_user].restrictedUSDT = userBalance[_user].restrictedUSDT.sub(
+            _amount
+        );
+    }
+
+    function _removeMaxFromRestrictedUSDTBalance(address _user, uint256 _amount)
+        internal
+    {
+        if (_amount >= userBalance[_user].restrictedUSDT) {
+            _removeFromRestrictedUSDTBalance(
+                _user,
+                userBalance[_user].restrictedUSDT
+            );
+        } else {
+            _removeFromRestrictedUSDTBalance(_user, _amount);
+        }
+    }
+
     function _removeFromXGTBalance(address _user, uint256 _amount) internal {
         userBalance[_user].xgt = userBalance[_user].xgt.sub(_amount);
     }
@@ -508,6 +707,28 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         }
     }
 
+    function getUserUSDTBalance(address _user) external view returns (uint256) {
+        uint256 usdtBalance = userBalance[_user].usdt;
+        if (userBalance[_user].merchantStakingDeposits > 0) {
+            (uint256 stakingBalance, , uint256 stakingShares) = staking
+                .getCurrentUserInfo(address(this));
+            usdtBalance = usdtBalance.add(
+                stakingBalance
+                    .mul(userBalance[_user].merchantStakingDeposits)
+                    .div(stakingShares)
+            );
+        }
+        return usdtBalance;
+    }
+
+    function getUserRestrictedUSDTBalance(address _user)
+        external
+        view
+        returns (uint256)
+    {
+        return userBalance[_user].restrictedUSDT;
+    }
+
     function getUserXGTBalance(address _user) external view returns (uint256) {
         uint256 xgtBalance = userBalance[_user].xgt;
         if (userBalance[_user].merchantStakingDeposits > 0) {
@@ -530,11 +751,11 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         return userBalance[_user].restrictedXGT;
     }
 
-    function getUserXDaiBalance(address _user) external view returns (uint256) {
+    function getUserMaticBalance(address _user) external view returns (uint256) {
         return userBalance[_user].base;
     }
 
-    function getUserRestrictedXDaiBalance(address _user)
+    function getUserRestrictedMaticBalance(address _user)
         external
         view
         returns (uint256)
