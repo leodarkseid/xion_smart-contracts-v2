@@ -29,7 +29,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
     IXGHub public hub;
     address public purchases;
 
-    uint256[] public totalCheckoutValues;
+    mapping (address => uint256) public totalCheckoutValue;
 
     uint256 public FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP;
     uint256 public DEPOSIT_FEE_IN_BP;
@@ -236,10 +236,11 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         address _token, 
         address _from,
         address _to,
-        uint256 _amount
+        uint256 _amount,
+        bool _withFreeze
     ) external onlyModule returns (bool) {
         if (_amount == 0) {
-            return (true);
+            return true;
         }
         uint256 tokensLeft = _removeMaxFromTokenBalance(_from, _token, _amount);
 
@@ -250,6 +251,21 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         ) {
             _transferFromToken(_token, _from, address(this), tokensLeft);
             tokensLeft = 0;
+        }
+
+        if (tokensLeft == 0) {
+            _removeMaxFromRestrictedTokenBalance(_token, _from, _amount);
+            uint256 amountAfterFreeze = _amount;
+            if (_withFreeze) {
+                amountAfterFreeze = _freeze(_to, _amount);
+            }
+            if (stakeRevenue[_to]) {
+                _stake(_to, amountAfterFreeze);
+            } else {
+                _transferToken(_token, _to, amountAfterFreeze);
+            }
+            totalCheckoutValue[_token] = totalCheckoutValue[_token].add(_amount);
+            return true;
         }
 
         return false;
