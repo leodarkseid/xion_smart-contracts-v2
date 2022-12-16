@@ -8,33 +8,15 @@ interface IXGWallet {
         XGT
     }
 
-    function payWithXGT(
+    function payWithToken(
+        address _token,
         address _from,
         address _to,
         uint256 _amount,
-        uint256 _rate,
-        bool _withFreeze,
-        bool _useFallback
-    ) external returns (bool, uint256);
+        bool _withFreeze
+    ) external returns (bool);
 
-    function payWithXDai(
-        address _from,
-        address _to,
-        uint256 _amount,
-        uint256 _rate,
-        bool _withFreeze,
-        bool _useFallback
-    ) external returns (bool, uint256);
-
-    function getCustomerXGTBalance(address _user)
-        external
-        view
-        returns (uint256);
-
-    function getCustomerXDaiBalance(address _user)
-        external
-        view
-        returns (uint256);
+    function getUserTokenBalance(address _token, address _user) external view returns (uint256);
 
     function pause() external;
 
