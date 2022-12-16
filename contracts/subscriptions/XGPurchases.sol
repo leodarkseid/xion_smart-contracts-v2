@@ -34,7 +34,6 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         bytes32 subscriptionID,
         uint256 processID,
         uint256 currency,
-        uint256 basePayment,
         uint256 tokenPayment,
         uint256 tokenPrice
     );
@@ -75,7 +74,7 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         bytes32 parentProductId,
         uint256 processID,
         uint256 price,
-        uint256 basePayment,
+        address tokenAddress,
         uint256 tokenPayment,
         uint256 tokenPrice
     ) public onlyAuthorized whenNotPaused {
@@ -91,7 +90,7 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         processOneTimePayment(
             purchaseId,
             processID,
-            basePayment,
+            tokenAddress,
             tokenPayment,
             tokenPrice
         );
@@ -100,46 +99,33 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
     function processOneTimePayment(
         bytes32 purchaseId,
         uint256 processID,
-        uint256 basePayment,
+        address tokenAddress,
         uint256 tokenPayment,
         uint256 tokenPrice
     ) public onlyAuthorized whenNotPaused {
         uint256 tokenPaymentValue = (tokenPayment.mul(tokenPrice)).div(10**18);
-        uint256 totalValue = basePayment.add(tokenPaymentValue);
         require(
-            totalValue <= purchases[purchaseId].price,
+            tokenPaymentValue <= purchases[purchaseId].price,
             "Payment cant be more then started payment amount"
         );
 
         require(!purchases[purchaseId].paid, "Already paid");
 
         uint256 currencyUsed = uint256(IXGWallet.Currency.NULL);
-        bool success = false;
-        if (basePayment > 0) {
-            (success, currencyUsed) = wallet.payWithXDai(
-                purchases[purchaseId].user,
-                purchases[purchaseId].merchant,
-                basePayment,
-                tokenPrice,
-                true,
-                false
-            );
-        } else {
-            (success, currencyUsed) = wallet.payWithXGT(
-                purchases[purchaseId].user,
-                purchases[purchaseId].merchant,
-                tokenPayment,
-                tokenPrice,
-                true,
-                false
-            );
-        }
+        bool success = wallet.payWithToken(
+            tokenAddress,
+            purchases[purchaseId].user,
+            purchases[purchaseId].merchant,
+            tokenPayment,
+            true
+        );
+
         require(success, "Payment failed");
 
         purchases[purchaseId].paid = true;
 
         if (address(cashback) != address(0)) {
-            cashback.addCashback(purchases[purchaseId].user, totalValue);
+            cashback.addCashback(purchases[purchaseId].user, tokenPaymentValue);
         }
 
         emit PurchasePaid(
@@ -148,7 +134,6 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
             purchaseId,
             processID,
             currencyUsed,
-            basePayment,
             tokenPayment,
             tokenPrice
         );
