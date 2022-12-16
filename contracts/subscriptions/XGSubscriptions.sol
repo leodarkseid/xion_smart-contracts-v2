@@ -56,8 +56,7 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         address merchant,
         bytes32 subscriptionID,
         uint256 rebillID,
-        uint256 currency,
-        uint256 basePayment,
+        address tokenAddress,
         uint256 tokenPayment,
         uint256 tokenPrice
     );
@@ -135,6 +134,7 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         uint256 billingDay,
         uint256 billingCycle,
         uint256 cycles,
+        address tokenAddress,
         uint256[] calldata priceInfo, // price, basePayment, tokenPayment, tokenPrice
         bool unlimited,
         bytes32 parentProductId
@@ -175,20 +175,18 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         processSubscriptionPayment(
             subscriptionId,
             0,
-            priceInfo[1],
+            tokenAddress,
             priceInfo[2],
-            priceInfo[3],
-            false
+            priceInfo[3]
         );
     }
 
     function processSubscriptionPayment(
         bytes32 subscriptionId,
         uint256 rebillID,
-        uint256 basePayment,
+        address tokenAddress,
         uint256 tokenPayment,
-        uint256 tokenPrice,
-        bool useFallback
+        uint256 tokenPrice
     ) public onlyAuthorized whenNotPaused {
         uint256 tokenPaymentValue = (tokenPayment.mul(tokenPrice)).div(10**18);
         require(
@@ -198,9 +196,8 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             "Subscription is over"
         );
         require(
-            (basePayment.add(tokenPaymentValue) <=
-                subscriptions[subscriptionId].price),
-            "Payment cant be more then started payment amount"
+            (tokenPaymentValue <= subscriptions[subscriptionId].price),
+            "Payment cant be more than started payment amount"
         );
         require(
             !productPaused[subscriptions[subscriptionId].productId],
@@ -243,27 +240,14 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             ].nextBillingDay.add(subscriptions[subscriptionId].billingCycle);
         }
 
-        uint256 currencyUsed = uint256(IXGWallet.Currency.NULL);
-        bool success = false;
-        if (basePayment > 0) {
-            (success, currencyUsed) = wallet.payWithXDai(
-                subscriptions[subscriptionId].user,
-                subscriptions[subscriptionId].merchant,
-                basePayment,
-                tokenPrice,
-                true,
-                useFallback
-            );
-        } else {
-            (success, currencyUsed) = wallet.payWithXGT(
-                subscriptions[subscriptionId].user,
-                subscriptions[subscriptionId].merchant,
-                tokenPayment,
-                tokenPrice,
-                true,
-                useFallback
-            );
-        }
+        bool success = wallet.payWithToken(
+            tokenAddress,
+            subscriptions[subscriptionId].user,
+            subscriptions[subscriptionId].merchant,
+            tokenPayment,
+            true
+        );
+
         require(success, "Payment failed");
 
         subscriptions[subscriptionId].status = Status.ACTIVE;
@@ -285,8 +269,7 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             subscriptions[subscriptionId].merchant,
             subscriptionId,
             rebillID,
-            currencyUsed,
-            basePayment,
+            tokenAddress,
             tokenPayment,
             tokenPrice
         );
@@ -388,7 +371,7 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
     function pauseSubscription(
         bytes32 subscriptionId,
         uint256 processID,
-        bool payWithXGT,
+        address tokenAddress,
         uint256 tokenPrice
     ) public onlyAuthorized whenNotPaused {
         require(
@@ -406,67 +389,34 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             .price
             .mul(100)
             .div(1000);
-        uint256 feeValue = subscriptions[subscriptionId].price.mul(25).div(
-            1000
-        );
 
-        if (payWithXGT) {
-            uint256 totalTokens = (totalValue.mul(10**18)).div(tokenPrice);
-            uint256 merchantAmount = (merchantValue.mul(10**18)).div(
-                tokenPrice
-            );
-            (bool successMerchant, ) = wallet.payWithXGT(
-                subscriptions[subscriptionId].user,
-                subscriptions[subscriptionId].merchant,
-                merchantAmount,
-                0,
-                true,
-                false
-            );
-            require(successMerchant, "Pause payment to merchant failed.");
-            (bool successFee, ) = wallet.payWithXGT(
-                subscriptions[subscriptionId].user,
-                feeWallet,
-                totalTokens.sub(merchantAmount),
-                0,
-                false,
-                false
-            );
-            require(successFee, "Pause payment to fee wallet failed.");
-            emit PauseSubscriptionByCustomer(
-                subscriptions[subscriptionId].user,
-                subscriptionId,
-                processID,
-                uint256(IXGWallet.Currency.XGT),
-                tokenPrice
-            );
-        } else {
-            (bool successMerchant, ) = wallet.payWithXDai(
-                subscriptions[subscriptionId].user,
-                subscriptions[subscriptionId].merchant,
-                merchantValue,
-                0,
-                false,
-                false
-            );
-            require(successMerchant, "Pause payment to merchant failed.");
-            (bool successFee, ) = wallet.payWithXGT(
-                subscriptions[subscriptionId].user,
-                feeWallet,
-                feeValue,
-                0,
-                false,
-                false
-            );
-            require(successFee, "Pause payment to fee wallet failed.");
-            emit PauseSubscriptionByCustomer(
-                subscriptions[subscriptionId].user,
-                subscriptionId,
-                processID,
-                uint256(IXGWallet.Currency.XDAI),
-                tokenPrice
-            );
-        }
+        uint256 totalTokens = (totalValue.mul(10**18)).div(tokenPrice);
+        uint256 merchantAmount = (merchantValue.mul(10**18)).div(
+            tokenPrice
+        );
+        bool successMerchant = wallet.payWithToken(
+            tokenAddress,
+            subscriptions[subscriptionId].user,
+            subscriptions[subscriptionId].merchant,
+            merchantAmount,
+            true
+        );
+        require(successMerchant, "Pause payment to merchant failed.");
+        bool successFee = wallet.payWithToken(
+            tokenAddress,
+            subscriptions[subscriptionId].user,
+            feeWallet,
+            totalTokens.sub(merchantAmount),
+            false
+        );
+        require(successFee, "Pause payment to fee wallet failed.");
+        emit PauseSubscriptionByCustomer(
+            subscriptions[subscriptionId].user,
+            subscriptionId,
+            processID,
+            uint256(IXGWallet.Currency.XGT),
+            tokenPrice
+        );
     }
 
     function activateSubscription(bytes32 subscriptionId, uint256 processID)
