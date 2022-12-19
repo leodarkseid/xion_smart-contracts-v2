@@ -1,13 +1,12 @@
-// SPDX-License-Identifier: AGPL-3.0
 pragma solidity 0.7.6;
 
 // Baal: check version of openzeppelin
 import "@openzeppelin/contracts-upgradeable@3.4.0/math/SafeMathUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/utils/PausableUpgradeable.sol";
-import "../interfaces/IXGWallet.sol";
-import "../interfaces/IXGHub.sol";
-import "../interfaces/IDateTime.sol";
+import "contracts/interfaces/IXGWallet.sol";
+import "contracts/interfaces/IXGHub.sol";
+import "contracts/interfaces/IDateTime.sol";
 
 contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
     using SafeMathUpgradeable for uint256;
@@ -51,7 +50,7 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         bytes32 productId
     );
 
-    event SubscriptionPaid(
+     event SubscriptionPaid(
         address user,
         address merchant,
         bytes32 subscriptionID,
@@ -61,11 +60,31 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         uint256 tokenPrice
     );
 
+    event RecurringBillingPaymentPaid(
+        address user,
+        address merchant,
+        bytes32 subscriptionID,
+        uint256 rebillID,
+        address tokenAddress,
+        uint256 tokenPayment,
+        uint256 tokenPrice
+    );
+
+    event SingleBillingPaymentPaid(
+        address user,
+        address merchant,
+        bytes32 purchaseId,
+        uint256 processId,
+        address tokenAddress,
+        uint256 tokenPayment,
+        uint256 tokenPrice
+    );
+
     event PauseSubscriptionByCustomer(
         address user,
         bytes32 subscriptionID,
         uint256 processID,
-        uint256 currency,
+        address tokenAddress,
         uint256 tokenPrice
     );
 
@@ -92,8 +111,7 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         bytes32 subscriptionID,
         uint256 processID
     );
-
-    function initialize(address _hub, address _dateTimeLib)
+function initialize(address _hub, address _dateTimeLib)
         external
         initializer
     {
@@ -414,9 +432,10 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             subscriptions[subscriptionId].user,
             subscriptionId,
             processID,
-            uint256(IXGWallet.Currency.XGT),
+            tokenAddress,
             tokenPrice
         );
+
     }
 
     function activateSubscription(bytes32 subscriptionId, uint256 processID)
