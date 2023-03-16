@@ -57,8 +57,8 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         for (uint256 i; i < _tokens.length; ++i) {
             tokenAddresses.push(_tokens[i]);
             tokens[_tokens[i]] = IERC20(_tokens[i]);
-            tokens[_tokens[i]].approve(_freezer, 2**256 - 1);
         }
+        xgt.approve(_freezer, 2**256 - 1);
 
         FREEZE_PERCENT_OF_MERCHANT_PAYMENT_IN_BP = 100;
         DEPOSIT_FEE_IN_BP = 0;
@@ -71,16 +71,16 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
 
     function setFreezerContract(address _freezer) external onlyOwner {
         freezer = IXGTFreezer(_freezer);
-        for (uint256 i; i < tokenAddresses.length; ++i) {
-            tokens[tokenAddresses[i]].approve(_freezer, 2**256 - 1);
-        }
+        xgt.approve(_freezer, 2**256 - 1);
     }
 
     function setSupportedToken(address _token) external onlyOwner {
         require(address(tokens[_token]) == address(0), "Token must not already be supported");
         tokenAddresses.push(_token);
         tokens[_token] = IERC20(_token);
-        tokens[_token].approve(address(freezer), 2**256 - 1);
+        if (_token == XGT_ADDRESS) {
+            xgt.approve(address(freezer), 2**256 - 1);
+        }
     }
 
     function setXGHub(address _hub) external onlyOwner {
@@ -239,6 +239,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         uint256 _amount,
         bool _withFreeze
     ) external onlyModule returns (bool) {
+        require(address(tokens[_token]) != address(0), "Token must be supported");
         if (_amount == 0) {
             return true;
         }
@@ -256,7 +257,7 @@ contract XGWallet is OwnableUpgradeable, PausableUpgradeable {
         if (tokensLeft == 0) {
             _removeMaxFromRestrictedTokenBalance(_token, _from, _amount);
             uint256 amountAfterFreeze = _amount;
-            if (_withFreeze) {
+            if (_withFreeze && _token == XGT_ADDRESS) {
                 amountAfterFreeze = _freeze(_to, _amount);
             }
             if (stakeRevenue[_to]) {
