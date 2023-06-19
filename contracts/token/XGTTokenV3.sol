@@ -14,14 +14,6 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import "./BlacklistableUpgradeable.sol";
 
-// Notes from Baal
-// - Blacklisting currently set to block to/from, making any blacklisted address completely radioactive.
-//   - Changing blacklisting to only from prevents blacklisted from spending, but does not block reception.
-//   - The policy for this should be defined prior to deploying in prod.
-// - A limit of 20% is placed on all taxes (prevents governance from setting 100% and stealing all funds).
-// - Original token minted directly to the different addresses. The current token mints to the deployer.
-// - As always, testing, testing, testing!
-
 contract XionGlobalToken is Initializable, ERC20Upgradeable, ERC20BurnableUpgradeable, ERC20SnapshotUpgradeable, AccessControlUpgradeable, PausableUpgradeable, ERC20PermitUpgradeable, ERC20VotesUpgradeable, UUPSUpgradeable, BlacklistableUpgradeable {
     using EnumerableSet for EnumerableSet.AddressSet;
     
