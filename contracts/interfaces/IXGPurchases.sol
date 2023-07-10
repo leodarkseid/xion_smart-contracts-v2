@@ -6,6 +6,8 @@ interface IXGPurchases {
 
     function setWallet(address _wallet) external;
 
+    function setBridge(address _bridge) external;
+
     function pause() external;
 
     function unpause() external;
