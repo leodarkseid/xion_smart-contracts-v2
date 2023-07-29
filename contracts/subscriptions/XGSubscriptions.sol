@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity 0.7.6;
 
+// Baal: check version of openzeppelin
 import "@openzeppelin/contracts-upgradeable@3.4.0/math/SafeMathUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/utils/PausableUpgradeable.sol";
@@ -144,7 +145,8 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         address tokenAddress,
         uint256[] calldata priceInfo, // price, basePayment, tokenPayment, tokenPrice
         bool unlimited,
-        bytes32 parentProductId
+        bytes32 parentProductId,
+        address bridgeWallet
     ) public onlyAuthorized whenNotPaused {
         require(
             !productPaused[productId] &&
@@ -184,7 +186,8 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             0,
             tokenAddress,
             priceInfo[2],
-            priceInfo[3]
+            priceInfo[3],
+            bridgeWallet
         );
     }
 
@@ -193,7 +196,8 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         uint256 rebillID,
         address tokenAddress,
         uint256 tokenPayment,
-        uint256 tokenPrice
+        uint256 tokenPrice,
+        address bridgeWallet
     ) public onlyAuthorized whenNotPaused {
         uint256 tokenPaymentValue = (tokenPayment.mul(tokenPrice)).div(10**18);
         require(
@@ -247,15 +251,14 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
             ].nextBillingDay.add(subscriptions[subscriptionId].billingCycle);
         }
 
-        bool success = wallet.payWithToken(
-            tokenAddress,
-            subscriptions[subscriptionId].user,
-            subscriptions[subscriptionId].merchant,
-            tokenPayment,
-            true
-        );
-
-        require(success, "Payment failed");
+        require(wallet.payWithToken(
+                tokenAddress,
+                subscriptions[subscriptionId].user,
+                subscriptions[subscriptionId].merchant,
+                tokenPayment,
+                bridgeWallet,
+                subscriptionId
+            ), "Payment failed");
 
         subscriptions[subscriptionId].status = Status.ACTIVE;
         subscriptions[subscriptionId].lastPaymentDate = block.timestamp;
@@ -389,6 +392,7 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
 
         subscriptions[subscriptionId].status = Status.PAUSED;
 
+        /*
         uint256 totalValue = subscriptions[subscriptionId].price.mul(125).div(
             1000
         );
@@ -401,22 +405,27 @@ contract XGSubscriptions is OwnableUpgradeable, PausableUpgradeable {
         uint256 merchantAmount = (merchantValue.mul(10**18)).div(
             tokenPrice
         );
-        bool successMerchant = wallet.payWithToken(
-            tokenAddress,
-            subscriptions[subscriptionId].user,
-            subscriptions[subscriptionId].merchant,
-            merchantAmount,
-            true
-        );
-        require(successMerchant, "Pause payment to merchant failed.");
-        bool successFee = wallet.payWithToken(
-            tokenAddress,
-            subscriptions[subscriptionId].user,
-            feeWallet,
-            totalTokens.sub(merchantAmount),
-            false
-        );
-        require(successFee, "Pause payment to fee wallet failed.");
+        */
+
+        uint256 totalTokens = (subscriptions[subscriptionId].price.mul(125).div(1000).mul(10**18)).div(tokenPrice);
+        uint256 merchantAmount = (subscriptions[subscriptionId].price.mul(100).div(1000).mul(10**18)).div(tokenPrice);
+
+        require(wallet.payWithToken(
+                tokenAddress,
+                subscriptions[subscriptionId].user,
+                subscriptions[subscriptionId].merchant,
+                merchantAmount,
+                address(0),
+                subscriptionId
+            ), "Pause payment to merchant failed.");
+        require(wallet.payWithToken(
+                tokenAddress,
+                subscriptions[subscriptionId].user,
+                feeWallet,
+                totalTokens.sub(merchantAmount),
+                address(0),
+                subscriptionId
+            ), "Pause payment to fee wallet failed.");
         emit PauseSubscriptionByCustomer(
             subscriptions[subscriptionId].user,
             subscriptionId,
