@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity 0.7.6;
 
+// Baal: check version of openzeppelin
 import "@openzeppelin/contracts-upgradeable@3.4.0/math/SafeMathUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/utils/PausableUpgradeable.sol";
@@ -69,6 +70,10 @@ contract XGHub is OwnableUpgradeable, PausableUpgradeable {
         feeWallet = _feeWallet;
         wallet.setFeeWallet(_feeWallet);
         subscriptions.setFeeWallet(_feeWallet);
+    }
+
+    function setBridge(address _bridge, bool _active) external onlyOwner {
+        purchases.setBridge(_bridge, _active);
     }
 
     function setAuthorizedAddress(address _address, bool _authorized)
