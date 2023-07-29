@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity 0.7.6;
 
+// Baal: check version of openzeppelin
 import "@openzeppelin/contracts-upgradeable@3.4.0/math/SafeMathUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable@3.4.0/utils/PausableUpgradeable.sol";
@@ -14,6 +15,7 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
     ICashbackModule public cashback;
     IXGWallet public wallet;
     IXGHub public hub;
+    mapping (address => bool) public bridges;
 
     struct Purchase {
         address user;
@@ -37,6 +39,12 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         uint256 tokenPrice
     );
 
+    event ConfirmDepositForPurchase(
+        uint256 id, 
+        address userDestinationAddress, 
+        uint256 amountUsd
+    );
+
     function initialize(address _hub) external initializer {
         hub = IXGHub(_hub);
 
@@ -57,6 +65,10 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         wallet = IXGWallet(_wallet);
     }
 
+    function setBridge(address _bridge, bool _active) external onlyHub {
+        bridges[_bridge] = _active;
+    }
+
     function pause() external onlyHub whenNotPaused {
         _pause();
     }
@@ -75,7 +87,8 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         uint256 price,
         address tokenAddress,
         uint256 tokenPayment,
-        uint256 tokenPrice
+        uint256 tokenPrice,
+        address bridgeWallet
     ) public onlyAuthorized whenNotPaused {
         purchases[purchaseId] = Purchase(
             user,
@@ -91,7 +104,8 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
             processID,
             tokenAddress,
             tokenPayment,
-            tokenPrice
+            tokenPrice,
+            bridgeWallet
         );
     }
 
@@ -100,7 +114,8 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         uint256 processID,
         address tokenAddress,
         uint256 tokenPayment,
-        uint256 tokenPrice
+        uint256 tokenPrice,
+        address bridgeWallet
     ) public onlyAuthorized whenNotPaused {
         uint256 tokenPaymentValue = (tokenPayment.mul(tokenPrice)).div(10**18);
         require(
@@ -111,15 +126,14 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         require(!purchases[purchaseId].paid, "Already paid");
 
         uint256 currencyUsed = uint256(IXGWallet.Currency.NULL);
-        bool success = wallet.payWithToken(
-            tokenAddress,
-            purchases[purchaseId].user,
-            purchases[purchaseId].merchant,
-            tokenPayment,
-            true
-        );
-
-        require(success, "Payment failed");
+        require(wallet.payWithToken(
+                tokenAddress,
+                purchases[purchaseId].user,
+                purchases[purchaseId].merchant,
+                tokenPayment,
+                bridgeWallet,
+                purchaseId
+            ), "Payment failed");
 
         purchases[purchaseId].paid = true;
 
@@ -138,6 +152,14 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
         );
     }
 
+    function confirmDepositForPurchase(
+        uint256 id, 
+        address userDestinationAddress, 
+        uint256 amountUsd
+    ) external onlyBridge {
+        emit ConfirmDepositForPurchase(id, userDestinationAddress, amountUsd);
+    }
+
     modifier onlyAuthorized() {
         require(
             hub.getAuthorizationStatus(msg.sender) || msg.sender == owner(),
@@ -148,6 +170,11 @@ contract XGPurchases is OwnableUpgradeable, PausableUpgradeable {
 
     modifier onlyHub() {
         require(msg.sender == address(hub), "Not authorized");
+        _;
+    }
+
+    modifier onlyBridge() {
+        require(bridges[msg.sender], "Not authorized");
         _;
     }
 }
