@@ -6,3 +6,4 @@ bin/
 node_modules
 .secrets.json
 scripts/
+.env
